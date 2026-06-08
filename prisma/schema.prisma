@@ -108,10 +108,13 @@ model Invoice {
 
   number      String
   amountCents Int
-  currency    String        @default("EUR")
+  currency    String        @default("CAD")
   issuedAt    DateTime      @default(now())
   dueAt       DateTime
   status      InvoiceStatus @default(PENDING)
+  paymentUrl  String?
+  description String?
+  paidAt      DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -120,10 +123,12 @@ model Invoice {
 
   @@index([organizationId])
   @@index([clientId])
+  @@index([organizationId, status])
 }
 
 enum InvoiceStatus {
   DRAFT
+  SENT
   PENDING
   OVERDUE
   PAID

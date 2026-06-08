@@ -30,6 +30,7 @@ export const clientStatusVariants: Record<ClientStatus, BadgeVariant> = {
 
 export const invoiceStatusLabels: Record<InvoiceStatus, string> = {
   DRAFT: "Brouillon",
+  SENT: "Envoyée",
   PENDING: "En attente",
   OVERDUE: "En retard",
   PAID: "Payée",
@@ -38,8 +39,16 @@ export const invoiceStatusLabels: Record<InvoiceStatus, string> = {
 
 export const invoiceStatusVariants: Record<InvoiceStatus, BadgeVariant> = {
   DRAFT: "outline",
+  SENT: "secondary",
   PENDING: "secondary",
   OVERDUE: "destructive",
   PAID: "default",
   CANCELLED: "outline",
+};
+
+/** Libellés des devises pour les sélecteurs et l'affichage. */
+export const currencyLabels: Record<string, string> = {
+  CAD: "Dollar canadien (CAD)",
+  USD: "Dollar US (USD)",
+  EUR: "Euro (EUR)",
 };

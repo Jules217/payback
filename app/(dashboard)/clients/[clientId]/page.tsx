@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { archiveClient } from "@/app/(dashboard)/clients/actions";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { displayStatus } from "@/lib/invoices/status";
 import {
   channelLabels,
   languageLabels,
@@ -164,27 +165,39 @@ export default async function ClientDetailPage({ params }: PageProps) {
                   <TableHead>Montant</TableHead>
                   <TableHead>Échéance</TableHead>
                   <TableHead>Statut</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {client.invoices.map((invoice) => (
-                  <TableRow key={invoice.id}>
-                    <TableCell className="font-medium">
-                      {invoice.number}
-                    </TableCell>
-                    <TableCell>
-                      {formatCurrency(invoice.amountCents, invoice.currency)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatDate(invoice.dueAt)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={invoiceStatusVariants[invoice.status]}>
-                        {invoiceStatusLabels[invoice.status]}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {client.invoices.map((invoice) => {
+                  const shown = displayStatus(invoice);
+                  return (
+                    <TableRow key={invoice.id}>
+                      <TableCell className="font-medium">
+                        {invoice.number}
+                      </TableCell>
+                      <TableCell>
+                        {formatCurrency(invoice.amountCents, invoice.currency)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(invoice.dueAt)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={invoiceStatusVariants[shown]}>
+                          {invoiceStatusLabels[shown]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Link
+                          href={`/invoices/${invoice.id}`}
+                          className="text-sm font-medium text-primary hover:underline"
+                        >
+                          Voir
+                        </Link>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

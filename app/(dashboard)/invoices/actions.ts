@@ -1,0 +1,208 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+
+import { prisma } from "@/lib/prisma";
+import { getCurrentOrganization } from "@/lib/current-organization";
+import { invoiceFormSchema } from "@/lib/validations/invoice";
+
+export type InvoiceFormState = {
+  ok: boolean;
+  message?: string;
+  errors?: Record<string, string[] | undefined>;
+  /** Valeurs ressaisies, renvoyées en cas d'erreur pour repeupler le formulaire. */
+  values?: Record<string, string>;
+};
+
+function readForm(formData: FormData) {
+  return {
+    clientId: String(formData.get("clientId") ?? ""),
+    number: String(formData.get("number") ?? ""),
+    amount: String(formData.get("amount") ?? ""),
+    currency: String(formData.get("currency") ?? "CAD"),
+    issuedAt: String(formData.get("issuedAt") ?? ""),
+    dueAt: String(formData.get("dueAt") ?? ""),
+    status: String(formData.get("status") ?? "DRAFT"),
+    paymentUrl: String(formData.get("paymentUrl") ?? ""),
+    description: String(formData.get("description") ?? ""),
+  };
+}
+
+/** Crée une facture dans l'organisation courante. */
+export async function createInvoice(
+  _prevState: InvoiceFormState,
+  formData: FormData
+): Promise<InvoiceFormState> {
+  const raw = readForm(formData);
+  const parsed = invoiceFormSchema.safeParse(raw);
+
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: "Veuillez corriger les erreurs ci-dessous.",
+      errors: parsed.error.flatten().fieldErrors,
+      values: raw,
+    };
+  }
+
+  const org = await getCurrentOrganization();
+  const data = parsed.data;
+
+  // Le client doit appartenir à l'organisation courante.
+  const client = await prisma.client.findFirst({
+    where: { id: data.clientId, organizationId: org.id },
+    select: { id: true },
+  });
+  if (!client) {
+    return {
+      ok: false,
+      message: "Client introuvable.",
+      errors: { clientId: ["Client introuvable"] },
+      values: raw,
+    };
+  }
+
+  const invoice = await prisma.invoice.create({
+    data: {
+      organizationId: org.id,
+      clientId: data.clientId,
+      number: data.number,
+      amountCents: Math.round(data.amount * 100),
+      currency: data.currency,
+      issuedAt: new Date(data.issuedAt),
+      dueAt: new Date(data.dueAt),
+      status: data.status,
+      paymentUrl: data.paymentUrl || null,
+      description: data.description || null,
+      paidAt: data.status === "PAID" ? new Date() : null,
+    },
+    select: { id: true },
+  });
+
+  revalidatePath("/invoices");
+  revalidatePath(`/clients/${data.clientId}`);
+  redirect(`/invoices/${invoice.id}`);
+}
+
+/** Met à jour une facture existante (scopée à l'organisation courante). */
+export async function updateInvoice(
+  invoiceId: string,
+  _prevState: InvoiceFormState,
+  formData: FormData
+): Promise<InvoiceFormState> {
+  const raw = readForm(formData);
+  const parsed = invoiceFormSchema.safeParse(raw);
+
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: "Veuillez corriger les erreurs ci-dessous.",
+      errors: parsed.error.flatten().fieldErrors,
+      values: raw,
+    };
+  }
+
+  const org = await getCurrentOrganization();
+  const existing = await prisma.invoice.findFirst({
+    where: { id: invoiceId, organizationId: org.id },
+    select: { id: true, status: true },
+  });
+
+  if (!existing) {
+    return { ok: false, message: "Facture introuvable.", values: raw };
+  }
+
+  // Une facture payée ou annulée ne se modifie pas directement.
+  if (existing.status === "PAID" || existing.status === "CANCELLED") {
+    return {
+      ok: false,
+      message:
+        "Cette facture est payée ou annulée et ne peut pas être modifiée.",
+      values: raw,
+    };
+  }
+
+  const data = parsed.data;
+
+  // Le client doit appartenir à l'organisation courante.
+  const client = await prisma.client.findFirst({
+    where: { id: data.clientId, organizationId: org.id },
+    select: { id: true },
+  });
+  if (!client) {
+    return {
+      ok: false,
+      message: "Client introuvable.",
+      errors: { clientId: ["Client introuvable"] },
+      values: raw,
+    };
+  }
+
+  // Cohérence du paidAt avec le statut choisi : renseigné au passage en PAID,
+  // effacé sinon.
+  const paidAt = data.status === "PAID" ? new Date() : null;
+
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      clientId: data.clientId,
+      number: data.number,
+      amountCents: Math.round(data.amount * 100),
+      currency: data.currency,
+      issuedAt: new Date(data.issuedAt),
+      dueAt: new Date(data.dueAt),
+      status: data.status,
+      paymentUrl: data.paymentUrl || null,
+      description: data.description || null,
+      paidAt,
+    },
+  });
+
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  revalidatePath(`/clients/${data.clientId}`);
+  redirect(`/invoices/${invoiceId}`);
+}
+
+/** Marque une facture comme payée (renseigne paidAt). */
+export async function markInvoiceAsPaid(invoiceId: string): Promise<void> {
+  const org = await getCurrentOrganization();
+
+  const existing = await prisma.invoice.findFirst({
+    where: { id: invoiceId, organizationId: org.id },
+    select: { id: true, status: true, clientId: true },
+  });
+  if (!existing || existing.status === "CANCELLED") return;
+
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { status: "PAID", paidAt: new Date() },
+  });
+
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  revalidatePath(`/clients/${existing.clientId}`);
+  redirect(`/invoices/${invoiceId}`);
+}
+
+/** Annule une facture (pas de suppression définitive). */
+export async function cancelInvoice(invoiceId: string): Promise<void> {
+  const org = await getCurrentOrganization();
+
+  const existing = await prisma.invoice.findFirst({
+    where: { id: invoiceId, organizationId: org.id },
+    select: { id: true, status: true, clientId: true },
+  });
+  if (!existing || existing.status === "PAID") return;
+
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { status: "CANCELLED" },
+  });
+
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  revalidatePath(`/clients/${existing.clientId}`);
+  redirect(`/invoices/${invoiceId}`);
+}

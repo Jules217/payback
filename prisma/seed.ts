@@ -127,70 +127,94 @@ async function main() {
   }
   console.log(`👥 ${demoClients.length} clients créés/à jour`);
 
-  // Quelques factures simples (dont des retards) pour les premiers clients
+  // Factures de démonstration couvrant les principaux cas :
+  // payée, en attente, en retard (7 j et 30 j) et annulée.
   const demoInvoices = [
     {
       id: "invoice_demo_1",
       clientId: "client_demo_1",
       number: "FAC-2025-001",
       amountCents: 120000,
-      dueAt: daysFromNow(-20),
-      status: "OVERDUE" as const,
+      currency: "CAD",
+      issuedAt: daysFromNow(-37),
+      dueAt: daysFromNow(-7),
+      status: "PENDING" as const,
+      paidAt: null as Date | null,
+      paymentUrl: "https://pay.payback-demo.app/inv/FAC-2025-001",
+      description: "Prestation de conseil — janvier.",
     },
     {
       id: "invoice_demo_2",
       clientId: "client_demo_1",
       number: "FAC-2025-002",
       amountCents: 45000,
+      currency: "CAD",
+      issuedAt: daysFromNow(-5),
       dueAt: daysFromNow(10),
       status: "PENDING" as const,
+      paidAt: null as Date | null,
+      paymentUrl: null as string | null,
+      description: "Acompte sur projet en cours.",
     },
     {
       id: "invoice_demo_3",
       clientId: "client_demo_2",
       number: "FAC-2025-003",
       amountCents: 89000,
-      dueAt: daysFromNow(-5),
-      status: "OVERDUE" as const,
+      currency: "CAD",
+      issuedAt: daysFromNow(-60),
+      dueAt: daysFromNow(-30),
+      status: "SENT" as const,
+      paidAt: null as Date | null,
+      paymentUrl: "https://pay.payback-demo.app/inv/FAC-2025-003",
+      description: "Maintenance trimestrielle.",
     },
     {
       id: "invoice_demo_4",
       clientId: "client_demo_3",
       number: "FAC-2025-004",
       amountCents: 250000,
-      dueAt: daysFromNow(-2),
-      status: "PENDING" as const,
+      currency: "CAD",
+      issuedAt: daysFromNow(-50),
+      dueAt: daysFromNow(-20),
+      status: "PAID" as const,
+      paidAt: daysFromNow(-18),
+      paymentUrl: null as string | null,
+      description: "Refonte du site — solde.",
     },
     {
       id: "invoice_demo_5",
       clientId: "client_demo_5",
       number: "FAC-2025-005",
       amountCents: 30000,
-      dueAt: daysFromNow(-40),
-      status: "PAID" as const,
+      currency: "CAD",
+      issuedAt: daysFromNow(-25),
+      dueAt: daysFromNow(5),
+      status: "CANCELLED" as const,
+      paidAt: null as Date | null,
+      paymentUrl: null as string | null,
+      description: "Commande annulée par le client.",
     },
   ];
 
   for (const inv of demoInvoices) {
+    const data = {
+      clientId: inv.clientId,
+      number: inv.number,
+      amountCents: inv.amountCents,
+      currency: inv.currency,
+      issuedAt: inv.issuedAt,
+      dueAt: inv.dueAt,
+      status: inv.status,
+      paidAt: inv.paidAt,
+      paymentUrl: inv.paymentUrl,
+      description: inv.description,
+      organizationId: org.id,
+    };
     await prisma.invoice.upsert({
       where: { id: inv.id },
-      update: {
-        clientId: inv.clientId,
-        number: inv.number,
-        amountCents: inv.amountCents,
-        dueAt: inv.dueAt,
-        status: inv.status,
-        organizationId: org.id,
-      },
-      create: {
-        id: inv.id,
-        organizationId: org.id,
-        clientId: inv.clientId,
-        number: inv.number,
-        amountCents: inv.amountCents,
-        dueAt: inv.dueAt,
-        status: inv.status,
-      },
+      update: data,
+      create: { id: inv.id, ...data },
     });
   }
   console.log(`🧾 ${demoInvoices.length} factures créées/à jour`);

@@ -18,6 +18,7 @@ export type ClientStatus = "ACTIVE" | "ARCHIVED";
 
 export type InvoiceStatus =
   | "DRAFT"
+  | "SENT"
   | "PENDING"
   | "OVERDUE"
   | "PAID"
@@ -82,6 +83,9 @@ export interface Invoice {
   issuedAt: Date;
   dueAt: Date;
   status: InvoiceStatus;
+  paymentUrl?: string | null;
+  description?: string | null;
+  paidAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
