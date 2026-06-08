@@ -1,15 +1,25 @@
 // Payback — schéma de base de données
-// État: squelette de l'étape 1. Les modèles reflètent les types métier
-// définis dans `types/index.ts`. À affiner lors de l'intégration DB.
+// Les modèles reflètent les types métier définis dans `types/index.ts`.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Utilisateur ───────────────────────────────────────────────
+// Géré manuellement pour l'instant (auth Supabase à venir).
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
 }
 
 // ── Organisation (tenant) ─────────────────────────────────────
@@ -23,18 +33,20 @@ model Organization {
   members           Membership[]
   clients           Client[]
   invoices          Invoice[]
+  payments          Payment[]
   reminderSequences ReminderSequence[]
   messageTemplates  MessageTemplate[]
   reminderEvents    ReminderEvent[]
 }
 
-// Lien utilisateur <-> organisation (auth gérée plus tard par Supabase)
+// Lien utilisateur <-> organisation
 model Membership {
   id             String       @id @default(cuid())
   userId         String
-  role           MemberRole   @default(OWNER)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role           MemberRole   @default(OWNER)
   createdAt      DateTime     @default(now())
 
   @@unique([userId, organizationId])
@@ -53,17 +65,37 @@ model Client {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  name      String
-  email     String?
-  phone     String?
-  company   String?
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  name             String
+  companyName      String?
+  email            String?
+  phone            String?
+  preferredChannel PreferredChannel @default(EMAIL)
+  language         Language         @default(FR)
+  status           ClientStatus     @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   invoices Invoice[]
 
   @@index([organizationId])
+  @@index([organizationId, status])
+}
+
+enum PreferredChannel {
+  EMAIL
+  SMS
+  BOTH
+}
+
+enum Language {
+  FR
+  EN
+}
+
+enum ClientStatus {
+  ACTIVE
+  ARCHIVED
 }
 
 // ── Factures ──────────────────────────────────────────────────
@@ -84,6 +116,7 @@ model Invoice {
   updatedAt   DateTime      @updatedAt
 
   reminderEvents ReminderEvent[]
+  payments       Payment[]
 
   @@index([organizationId])
   @@index([clientId])
@@ -95,6 +128,33 @@ enum InvoiceStatus {
   OVERDUE
   PAID
   CANCELLED
+}
+
+// ── Paiements ─────────────────────────────────────────────────
+model Payment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  amountCents Int
+  currency    String        @default("EUR")
+  method      PaymentMethod @default(OTHER)
+  paidAt      DateTime      @default(now())
+  note        String?
+  createdAt   DateTime      @default(now())
+
+  @@index([organizationId])
+  @@index([invoiceId])
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  CHECK
+  OTHER
 }
 
 // ── Scénarios de relance ──────────────────────────────────────
@@ -159,11 +219,11 @@ model ReminderEvent {
   invoiceId      String
   invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
-  channel   ReminderChannel
-  status    ReminderEventStatus @default(SCHEDULED)
+  channel     ReminderChannel
+  status      ReminderEventStatus @default(SCHEDULED)
   scheduledAt DateTime
-  sentAt    DateTime?
-  createdAt DateTime            @default(now())
+  sentAt      DateTime?
+  createdAt   DateTime            @default(now())
 
   @@index([organizationId])
   @@index([invoiceId])

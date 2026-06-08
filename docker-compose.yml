@@ -1,0 +1,19 @@
+# Postgres local pour le développement de Payback.
+# Démarrer :  docker compose up -d
+# La DATABASE_URL correspondante est dans .env.example.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: payback-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: payback
+      POSTGRES_PASSWORD: payback
+      POSTGRES_DB: payback
+    ports:
+      - "5432:5432"
+    volumes:
+      - payback_pgdata:/var/lib/postgresql/data
+
+volumes:
+  payback_pgdata:

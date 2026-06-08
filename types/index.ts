@@ -1,10 +1,8 @@
 /**
  * Types métier principaux de Payback.
  *
- * Ces types sont volontairement indépendants de Prisma à ce stade :
- * ils décrivent le domaine et servent de contrat pour l'UI et l'API.
- * Lorsque la base de données sera branchée, ils pourront être alignés
- * sur (ou dérivés de) `@prisma/client`.
+ * Indépendants de Prisma : ils décrivent le domaine et servent de contrat
+ * pour l'UI et l'API. Les littéraux d'enum sont alignés sur le schéma Prisma.
  */
 
 export type ID = string;
@@ -12,12 +10,25 @@ export type ID = string;
 // ── Énumérations partagées ────────────────────────────────────
 export type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 
+export type PreferredChannel = "EMAIL" | "SMS" | "BOTH";
+
+export type Language = "FR" | "EN";
+
+export type ClientStatus = "ACTIVE" | "ARCHIVED";
+
 export type InvoiceStatus =
   | "DRAFT"
   | "PENDING"
   | "OVERDUE"
   | "PAID"
   | "CANCELLED";
+
+export type PaymentMethod =
+  | "CASH"
+  | "BANK_TRANSFER"
+  | "CARD"
+  | "CHECK"
+  | "OTHER";
 
 export type ReminderChannel = "EMAIL" | "SMS";
 
@@ -28,6 +39,14 @@ export type ReminderEventStatus =
   | "CANCELLED";
 
 // ── Entités ───────────────────────────────────────────────────
+
+export interface User {
+  id: ID;
+  email: string;
+  name?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 export interface Organization {
   id: ID;
@@ -41,9 +60,12 @@ export interface Client {
   id: ID;
   organizationId: ID;
   name: string;
+  companyName?: string | null;
   email?: string | null;
   phone?: string | null;
-  company?: string | null;
+  preferredChannel: PreferredChannel;
+  language: Language;
+  status: ClientStatus;
   notes?: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -62,6 +84,18 @@ export interface Invoice {
   status: InvoiceStatus;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface Payment {
+  id: ID;
+  organizationId: ID;
+  invoiceId: ID;
+  amountCents: number;
+  currency: string;
+  method: PaymentMethod;
+  paidAt: Date;
+  note?: string | null;
+  createdAt: Date;
 }
 
 export interface ReminderSequence {

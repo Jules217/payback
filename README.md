@@ -16,14 +16,34 @@ entreprises, cabinets et secrétaires administratives.
 ## Démarrage
 
 ```bash
-npm install
+npm install                 # installe les deps + génère le client Prisma (postinstall)
+
+# 1. Base de données Postgres
+cp .env.example .env        # (Windows: copy .env.example .env)
+docker compose up -d        # démarre un Postgres local (ou utilisez votre DATABASE_URL)
+
+# 2. Schéma + données de démonstration
+npm run db:push             # applique le schéma Prisma à la base
+npm run db:seed             # crée l'org, l'utilisateur et 5 clients de démo
+
+# 3. Lancer l'app
 npm run dev
 ```
 
-L'application est disponible sur http://localhost:3000.
+L'application est disponible sur http://localhost:3000. La page **Clients**
+(`/clients`) affiche les clients seedés.
 
-> Le client Prisma est généré au `postinstall`. Pour le régénérer après une
-> modification du schéma : `npm run db:generate`.
+> Pas de Docker ? Renseignez simplement `DATABASE_URL` dans `.env` (Supabase,
+> Neon, ou un Postgres existant), puis lancez `db:push` et `db:seed`.
+>
+> Le client Prisma est régénéré via `npm run db:generate` après toute
+> modification de `prisma/schema.prisma`.
+
+## Authentification (temporaire)
+
+L'auth n'est pas encore branchée. Une organisation de démonstration fixe est
+résolue côté serveur par `lib/current-organization.ts`. Elle sera remplacée par
+la session utilisateur (Supabase Auth) à une étape ultérieure.
 
 ## Scripts
 
@@ -36,6 +56,7 @@ L'application est disponible sur http://localhost:3000.
 | `npm run typecheck` | Vérifie les types (tsc) |
 | `npm run db:generate` | Génère le client Prisma |
 | `npm run db:push` | Pousse le schéma vers la base (nécessite `DATABASE_URL`) |
+| `npm run db:seed` | Insère les données de démonstration |
 | `npm run db:studio` | Ouvre Prisma Studio |
 
 ## Structure
