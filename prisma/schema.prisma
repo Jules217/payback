@@ -1,0 +1,177 @@
+// Payback — schéma de base de données
+// État: squelette de l'étape 1. Les modèles reflètent les types métier
+// définis dans `types/index.ts`. À affiner lors de l'intégration DB.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Organisation (tenant) ─────────────────────────────────────
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members           Membership[]
+  clients           Client[]
+  invoices          Invoice[]
+  reminderSequences ReminderSequence[]
+  messageTemplates  MessageTemplate[]
+  reminderEvents    ReminderEvent[]
+}
+
+// Lien utilisateur <-> organisation (auth gérée plus tard par Supabase)
+model Membership {
+  id             String       @id @default(cuid())
+  userId         String
+  role           MemberRole   @default(OWNER)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// ── Clients (débiteurs) ───────────────────────────────────────
+model Client {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String
+  email     String?
+  phone     String?
+  company   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoices Invoice[]
+
+  @@index([organizationId])
+}
+
+// ── Factures ──────────────────────────────────────────────────
+model Invoice {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  number      String
+  amountCents Int
+  currency    String        @default("EUR")
+  issuedAt    DateTime      @default(now())
+  dueAt       DateTime
+  status      InvoiceStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  reminderEvents ReminderEvent[]
+
+  @@index([organizationId])
+  @@index([clientId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  OVERDUE
+  PAID
+  CANCELLED
+}
+
+// ── Scénarios de relance ──────────────────────────────────────
+model ReminderSequence {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps ReminderStep[]
+
+  @@index([organizationId])
+}
+
+model ReminderStep {
+  id         String           @id @default(cuid())
+  sequenceId String
+  sequence   ReminderSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  templateId String?
+  template   MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  // Décalage en jours par rapport à l'échéance (négatif = avant, positif = après)
+  offsetDays Int
+  channel    ReminderChannel @default(EMAIL)
+  order      Int             @default(0)
+
+  @@index([sequenceId])
+}
+
+enum ReminderChannel {
+  EMAIL
+  SMS
+}
+
+// ── Modèles de message ────────────────────────────────────────
+model MessageTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String
+  subject   String?
+  body      String
+  channel   ReminderChannel @default(EMAIL)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  steps ReminderStep[]
+
+  @@index([organizationId])
+}
+
+// ── Journal des relances ──────────────────────────────────────
+model ReminderEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  channel   ReminderChannel
+  status    ReminderEventStatus @default(SCHEDULED)
+  scheduledAt DateTime
+  sentAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  @@index([organizationId])
+  @@index([invoiceId])
+}
+
+enum ReminderEventStatus {
+  SCHEDULED
+  SENT
+  FAILED
+  CANCELLED
+}
