@@ -33,8 +33,11 @@ export type PaymentMethod =
 
 export type ReminderChannel = "EMAIL" | "SMS";
 
+export type ReminderTone = "GENTLE" | "PROFESSIONAL" | "FIRM";
+
 export type ReminderEventStatus =
   | "SCHEDULED"
+  | "SIMULATED"
   | "SENT"
   | "FAILED"
   | "CANCELLED";
@@ -120,6 +123,7 @@ export interface ReminderStep {
   offsetDays: number;
   channel: ReminderChannel;
   order: number;
+  isActive: boolean;
 }
 
 export interface MessageTemplate {
@@ -129,6 +133,9 @@ export interface MessageTemplate {
   subject?: string | null;
   body: string;
   channel: ReminderChannel;
+  tone: ReminderTone;
+  language: Language;
+  isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -141,6 +148,9 @@ export interface ReminderEvent {
   status: ReminderEventStatus;
   scheduledAt: Date;
   sentAt?: Date | null;
+  offsetDays?: number | null;
+  messageSubject?: string | null;
+  messageBody?: string | null;
   createdAt: Date;
 }
 

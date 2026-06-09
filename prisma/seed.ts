@@ -219,6 +219,124 @@ async function main() {
   }
   console.log(`🧾 ${demoInvoices.length} factures créées/à jour`);
 
+  // ── Templates de message ────────────────────────────────────
+  const demoTemplates = [
+    {
+      id: "template_demo_gentle",
+      name: "Rappel doux",
+      tone: "GENTLE" as const,
+      subject: "Petit rappel : facture {{invoice_number}}",
+      body:
+        "Bonjour {{client_name}},\n\n" +
+        "J'espère que vous allez bien. Sauf erreur de notre part, la facture " +
+        "{{invoice_number}} d'un montant de {{amount}}, échue le {{due_date}}, " +
+        "reste à régler.\n\n" +
+        "Vous pouvez la régler via ce lien : {{payment_link}}\n\n" +
+        "Merci par avance,\n{{organization_name}}",
+    },
+    {
+      id: "template_demo_professional",
+      name: "Rappel professionnel",
+      tone: "PROFESSIONAL" as const,
+      subject: "Relance : facture {{invoice_number}} échue",
+      body:
+        "Bonjour {{client_name}},\n\n" +
+        "Nous revenons vers vous concernant la facture {{invoice_number}} d'un " +
+        "montant de {{amount}}, dont l'échéance était le {{due_date}} et qui " +
+        "demeure impayée à ce jour.\n\n" +
+        "Nous vous remercions de bien vouloir procéder au règlement : " +
+        "{{payment_link}}\n\n" +
+        "Cordialement,\n{{organization_name}}",
+    },
+    {
+      id: "template_demo_firm",
+      name: "Dernier rappel amiable",
+      tone: "FIRM" as const,
+      subject: "Dernier rappel amiable : facture {{invoice_number}}",
+      body:
+        "Bonjour {{client_name}},\n\n" +
+        "Malgré nos précédents rappels, la facture {{invoice_number}} d'un " +
+        "montant de {{amount}}, échue le {{due_date}}, reste impayée.\n\n" +
+        "Nous vous invitons à régulariser la situation sous les meilleurs délais " +
+        "afin d'éviter toute procédure : {{payment_link}}\n\n" +
+        "Bien à vous,\n{{organization_name}}",
+    },
+  ];
+
+  for (const t of demoTemplates) {
+    const data = {
+      organizationId: org.id,
+      name: t.name,
+      subject: t.subject,
+      body: t.body,
+      channel: "EMAIL" as const,
+      tone: t.tone,
+      language: "FR" as const,
+    };
+    // update vide : on ne réécrit pas un modèle déjà présent pour préserver les
+    // éventuelles modifications faites depuis l'interface en dev.
+    await prisma.messageTemplate.upsert({
+      where: { id: t.id },
+      update: {},
+      create: { id: t.id, ...data },
+    });
+  }
+  console.log(`✉️  ${demoTemplates.length} templates créés/à jour`);
+
+  // ── Séquence de relance par défaut ──────────────────────────
+  const SEQUENCE_ID = "sequence_demo_standard";
+  // update vide : on préserve le nom/état si la séquence a été éditée en dev.
+  await prisma.reminderSequence.upsert({
+    where: { id: SEQUENCE_ID },
+    update: {},
+    create: {
+      id: SEQUENCE_ID,
+      organizationId: org.id,
+      name: "Relance amiable standard",
+      isActive: true,
+    },
+  });
+
+  const demoSteps = [
+    {
+      id: "step_demo_7",
+      offsetDays: 7,
+      order: 0,
+      templateId: "template_demo_gentle",
+    },
+    {
+      id: "step_demo_14",
+      offsetDays: 14,
+      order: 1,
+      templateId: "template_demo_professional",
+    },
+    {
+      id: "step_demo_30",
+      offsetDays: 30,
+      order: 2,
+      templateId: "template_demo_firm",
+    },
+  ];
+
+  for (const s of demoSteps) {
+    const data = {
+      sequenceId: SEQUENCE_ID,
+      templateId: s.templateId,
+      offsetDays: s.offsetDays,
+      channel: "EMAIL" as const,
+      order: s.order,
+    };
+    // update vide : on préserve les étapes éventuellement modifiées en dev.
+    await prisma.reminderStep.upsert({
+      where: { id: s.id },
+      update: {},
+      create: { id: s.id, ...data },
+    });
+  }
+  console.log(
+    `🔁 Séquence « Relance amiable standard » : ${demoSteps.length} étapes`
+  );
+
   console.log("✅ Seed terminé.");
 }
 

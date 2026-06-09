@@ -3,6 +3,9 @@ import type {
   Language,
   ClientStatus,
   InvoiceStatus,
+  ReminderChannel,
+  ReminderTone,
+  ReminderEventStatus,
 } from "@/types";
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
@@ -52,3 +55,45 @@ export const currencyLabels: Record<string, string> = {
   USD: "Dollar US (USD)",
   EUR: "Euro (EUR)",
 };
+
+// ── Relances ──────────────────────────────────────────────────
+export const reminderChannelLabels: Record<ReminderChannel, string> = {
+  EMAIL: "Email",
+  SMS: "SMS",
+};
+
+export const reminderToneLabels: Record<ReminderTone, string> = {
+  GENTLE: "Doux",
+  PROFESSIONAL: "Professionnel",
+  FIRM: "Ferme",
+};
+
+export const reminderToneVariants: Record<ReminderTone, BadgeVariant> = {
+  GENTLE: "secondary",
+  PROFESSIONAL: "outline",
+  FIRM: "destructive",
+};
+
+export const reminderEventStatusLabels: Record<ReminderEventStatus, string> = {
+  SCHEDULED: "Programmée",
+  SIMULATED: "Simulée",
+  SENT: "Envoyée",
+  FAILED: "Échouée",
+  CANCELLED: "Annulée",
+};
+
+export const reminderEventStatusVariants: Record<
+  ReminderEventStatus,
+  BadgeVariant
+> = {
+  SCHEDULED: "outline",
+  SIMULATED: "secondary",
+  SENT: "default",
+  FAILED: "destructive",
+  CANCELLED: "outline",
+};
+
+/** Libellé court d'une étape par décalage de jours : 7 → « J+7 ». */
+export function stepOffsetLabel(offsetDays: number): string {
+  return offsetDays >= 0 ? `J+${offsetDays}` : `J${offsetDays}`;
+}

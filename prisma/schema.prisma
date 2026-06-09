@@ -189,6 +189,7 @@ model ReminderStep {
   offsetDays Int
   channel    ReminderChannel @default(EMAIL)
   order      Int             @default(0)
+  isActive   Boolean         @default(true)
 
   @@index([sequenceId])
 }
@@ -201,19 +202,28 @@ enum ReminderChannel {
 // ── Modèles de message ────────────────────────────────────────
 model MessageTemplate {
   id             String       @id @default(cuid())
-  organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
 
   name      String
   subject   String?
   body      String
   channel   ReminderChannel @default(EMAIL)
+  tone      ReminderTone    @default(PROFESSIONAL)
+  language  Language        @default(FR)
+  isActive  Boolean         @default(true)
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
 
   steps ReminderStep[]
 
   @@index([organizationId])
+}
+
+enum ReminderTone {
+  GENTLE
+  PROFESSIONAL
+  FIRM
 }
 
 // ── Journal des relances ──────────────────────────────────────
@@ -224,11 +234,15 @@ model ReminderEvent {
   invoiceId      String
   invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
-  channel     ReminderChannel
-  status      ReminderEventStatus @default(SCHEDULED)
-  scheduledAt DateTime
-  sentAt      DateTime?
-  createdAt   DateTime            @default(now())
+  channel        ReminderChannel
+  status         ReminderEventStatus @default(SCHEDULED)
+  scheduledAt    DateTime
+  sentAt         DateTime?
+  /** Décalage de l'étape déclenchante (J+7 → 7), pour l'historique et l'anti-doublon. */
+  offsetDays     Int?
+  messageSubject String?
+  messageBody    String?
+  createdAt      DateTime            @default(now())
 
   @@index([organizationId])
   @@index([invoiceId])
@@ -236,6 +250,7 @@ model ReminderEvent {
 
 enum ReminderEventStatus {
   SCHEDULED
+  SIMULATED
   SENT
   FAILED
   CANCELLED

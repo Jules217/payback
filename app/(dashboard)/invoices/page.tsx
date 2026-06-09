@@ -33,7 +33,6 @@ const FILTERS = [
 
 type FilterKey = (typeof FILTERS)[number]["key"];
 
-/** Prédicat de filtre basé sur le statut affiché (retard calculé inclus). */
 function matchesFilter(filter: FilterKey, shown: InvoiceStatus): boolean {
   switch (filter) {
     case "overdue":
@@ -63,8 +62,27 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
     include: { client: { select: { id: true, name: true } } },
   });
 
+  // Statuts affichés (retard calculé inclus) — base des counts et du filtrage.
+  const shownStatuses = invoices.map((inv) => displayStatus(inv));
+
+  const counts: Record<FilterKey, number> = {
+    all: invoices.length,
+    overdue: shownStatuses.filter((s) => s === "OVERDUE").length,
+    pending: shownStatuses.filter((s) =>
+      ["PENDING", "SENT", "DRAFT"].includes(s)
+    ).length,
+    paid: shownStatuses.filter((s) => s === "PAID").length,
+    cancelled: shownStatuses.filter((s) => s === "CANCELLED").length,
+  };
+
+  // Résumé financier : montant total à encaisser (ni payé ni annulé)
+  const unpaidCents = invoices
+    .filter((inv) => inv.status !== "PAID" && inv.status !== "CANCELLED")
+    .reduce((sum, inv) => sum + inv.amountCents, 0);
+  const dominantCurrency = invoices.find((inv) => inv.currency)?.currency ?? "CAD";
+
   const rows = invoices
-    .map((inv) => ({ inv, shown: displayStatus(inv) }))
+    .map((inv, i) => ({ inv, shown: shownStatuses[i] }))
     .filter(({ shown }) => matchesFilter(activeFilter, shown));
 
   return (
@@ -86,9 +104,42 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
         </Link>
       </div>
 
+      {/* Résumé financier */}
+      {invoices.length > 0 ? (
+        <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border bg-card px-4 py-3 text-sm">
+          <span>
+            <span
+              className={cn(
+                "font-semibold",
+                counts.overdue > 0 ? "text-destructive" : "text-foreground"
+              )}
+            >
+              {counts.overdue}
+            </span>{" "}
+            <span className="text-muted-foreground">
+              facture{counts.overdue > 1 ? "s" : ""} en retard
+            </span>
+          </span>
+          <span className="text-muted-foreground hidden sm:inline">·</span>
+          <span>
+            <span className="font-semibold">
+              {formatCurrency(unpaidCents, dominantCurrency)}
+            </span>{" "}
+            <span className="text-muted-foreground">à encaisser</span>
+          </span>
+          <span className="text-muted-foreground hidden sm:inline">·</span>
+          <span>
+            <span className="font-semibold">{counts.pending}</span>{" "}
+            <span className="text-muted-foreground">en attente</span>
+          </span>
+        </div>
+      ) : null}
+
+      {/* Filtres avec compteurs */}
       <div className="flex flex-wrap gap-2">
         {FILTERS.map((f) => {
-          const href = f.key === "all" ? "/invoices" : `/invoices?status=${f.key}`;
+          const href =
+            f.key === "all" ? "/invoices" : `/invoices?status=${f.key}`;
           const isActive = f.key === activeFilter;
           return (
             <Link
@@ -101,7 +152,19 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
                   : "border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               )}
             >
-              {f.label}
+              {f.label}{" "}
+              <span
+                className={cn(
+                  "text-xs",
+                  isActive
+                    ? "opacity-75"
+                    : counts[f.key] > 0 && f.key === "overdue"
+                    ? "font-semibold text-destructive"
+                    : "opacity-60"
+                )}
+              >
+                ({counts[f.key]})
+              </span>
             </Link>
           );
         })}
@@ -154,7 +217,10 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
                 {rows.map(({ inv, shown }) => {
                   const late = shown === "OVERDUE" ? daysOverdue(inv) : 0;
                   return (
-                    <TableRow key={inv.id}>
+                    <TableRow
+                      key={inv.id}
+                      className={late > 0 ? "bg-destructive/5" : undefined}
+                    >
                       <TableCell className="font-medium">{inv.number}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {inv.client.name}
@@ -169,13 +235,13 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
                         {formatDate(inv.dueAt)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-col gap-1">
                           <Badge variant={invoiceStatusVariants[shown]}>
                             {invoiceStatusLabels[shown]}
                           </Badge>
                           {late > 0 ? (
-                            <span className="text-xs text-destructive">
-                              +{late} j
+                            <span className="text-xs font-medium text-destructive">
+                              {late} jour{late > 1 ? "s" : ""} de retard
                             </span>
                           ) : null}
                         </div>
