@@ -15,10 +15,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  SequenceStepsTable,
+  SequenceTimeline,
   hasTemplateIssues,
   type SequenceStepRow,
-} from "@/components/reminders/sequence-steps-table";
+} from "@/components/reminders/sequence-timeline";
 
 export const metadata: Metadata = { title: "Séquence de relance" };
 export const dynamic = "force-dynamic";
@@ -95,7 +95,7 @@ export default async function SequenceDetailPage({ params }: PageProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          <SequenceStepsTable
+          <SequenceTimeline
             steps={steps}
             eligibleCountByOffset={eligibleCountByOffset}
           />

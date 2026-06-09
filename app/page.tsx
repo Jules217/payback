@@ -51,7 +51,7 @@ export default function LandingPage() {
           <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground">
             Micro-SaaS de relance amiable
           </span>
-          <h1 className="mt-6 text-4xl font-bold tracking-tight sm:text-5xl">
+          <h1 className="mt-6 font-display text-4xl font-bold leading-tight tracking-tight sm:text-5xl">
             Récupérez vos impayés sans y passer vos journées
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">

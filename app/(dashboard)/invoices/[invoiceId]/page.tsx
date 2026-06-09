@@ -33,6 +33,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   invoiceStatusLabels,
   invoiceStatusVariants,
+  invoiceStatusBadgeClasses,
   reminderEventStatusVariants,
   reminderEventLabel,
   reminderToneLabels,
@@ -204,8 +205,13 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold">{invoice.number}</h2>
-            <Badge variant={invoiceStatusVariants[shown]}>
+            <h2 className="font-mono text-2xl font-semibold">
+              {invoice.number}
+            </h2>
+            <Badge
+              variant={invoiceStatusVariants[shown]}
+              className={invoiceStatusBadgeClasses[shown]}
+            >
               {invoiceStatusLabels[shown]}
             </Badge>
           </div>
@@ -267,7 +273,11 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
           <CardContent className="divide-y">
             <InfoRow
               label="Montant"
-              value={formatCurrency(invoice.amountCents, invoice.currency)}
+              value={
+                <span className="tabular-nums">
+                  {formatCurrency(invoice.amountCents, invoice.currency)}
+                </span>
+              }
             />
             <InfoRow
               label="Statut réel"

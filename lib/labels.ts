@@ -9,7 +9,13 @@ import type {
   ReminderDeliveryMode,
 } from "@/types";
 
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+type BadgeVariant =
+  | "default"
+  | "secondary"
+  | "destructive"
+  | "outline"
+  | "success"
+  | "warning";
 
 export const channelLabels: Record<PreferredChannel, string> = {
   EMAIL: "Email",
@@ -42,13 +48,22 @@ export const invoiceStatusLabels: Record<InvoiceStatus, string> = {
 };
 
 export const invoiceStatusVariants: Record<InvoiceStatus, BadgeVariant> = {
-  DRAFT: "outline",
-  SENT: "secondary",
-  PENDING: "secondary",
+  DRAFT: "secondary",
+  SENT: "outline",
+  PENDING: "warning",
   OVERDUE: "destructive",
-  PAID: "default",
-  CANCELLED: "outline",
+  PAID: "success",
+  CANCELLED: "secondary",
 };
+
+/**
+ * Classes additionnelles par statut de facture (au-delà du variant de badge).
+ * `CANCELLED` reçoit un texte rayé pour signaler l'annulation sans alarmer.
+ */
+export const invoiceStatusBadgeClasses: Partial<Record<InvoiceStatus, string>> =
+  {
+    CANCELLED: "line-through",
+  };
 
 /** Libellés des devises pour les sélecteurs et l'affichage. */
 export const currencyLabels: Record<string, string> = {
@@ -70,8 +85,8 @@ export const reminderToneLabels: Record<ReminderTone, string> = {
 };
 
 export const reminderToneVariants: Record<ReminderTone, BadgeVariant> = {
-  GENTLE: "secondary",
-  PROFESSIONAL: "outline",
+  GENTLE: "success",
+  PROFESSIONAL: "secondary",
   FIRM: "destructive",
 };
 

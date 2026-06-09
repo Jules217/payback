@@ -5,7 +5,11 @@ import { Plus, FileText } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
-import { invoiceStatusLabels, invoiceStatusVariants } from "@/lib/labels";
+import {
+  invoiceStatusLabels,
+  invoiceStatusVariants,
+  invoiceStatusBadgeClasses,
+} from "@/lib/labels";
 import { displayStatus, daysOverdue } from "@/lib/invoices/status";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -206,7 +210,7 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
                 <TableRow>
                   <TableHead>Numéro</TableHead>
                   <TableHead>Client</TableHead>
-                  <TableHead>Montant</TableHead>
+                  <TableHead className="text-right">Montant</TableHead>
                   <TableHead>Émission</TableHead>
                   <TableHead>Échéance</TableHead>
                   <TableHead>Statut</TableHead>
@@ -221,11 +225,13 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
                       key={inv.id}
                       className={late > 0 ? "bg-destructive/5" : undefined}
                     >
-                      <TableCell className="font-medium">{inv.number}</TableCell>
+                      <TableCell className="font-mono font-medium">
+                        {inv.number}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {inv.client.name}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="text-right tabular-nums">
                         {formatCurrency(inv.amountCents, inv.currency)}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
@@ -235,12 +241,15 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
                         {formatDate(inv.dueAt)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <Badge variant={invoiceStatusVariants[shown]}>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge
+                            variant={invoiceStatusVariants[shown]}
+                            className={invoiceStatusBadgeClasses[shown]}
+                          >
                             {invoiceStatusLabels[shown]}
                           </Badge>
                           {late > 0 ? (
-                            <span className="text-xs font-medium text-destructive">
+                            <span className="text-xs text-muted-foreground">
                               {late} jour{late > 1 ? "s" : ""} de retard
                             </span>
                           ) : null}

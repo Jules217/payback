@@ -2,6 +2,7 @@
 
 > Rapport **factuel**, en lecture seule, basé uniquement sur les fichiers réels du dépôt.
 > Date de l'audit : 2026-06-09. Branche : `master`. Aucune valeur de secret n'est exposée (noms de variables uniquement).
+> Révisé après les étapes de refonte design 1–3 puis une passe de polish : palette « Confiance & calme », polices Fraunces/Hanken/IBM Plex Mono, primitives shadcn supplémentaires, timeline de relance, navigation mobile, dashboard enrichi (buckets d'ancienneté neutres si vides), badges de statut en pastilles inline, hero de la landing en Fraunces.
 
 ---
 
@@ -26,6 +27,8 @@
 | UI / styling | `clsx` | ^2.1.1 |
 | UI / styling | `tailwind-merge` | ^2.6.0 |
 | Icônes | `lucide-react` | ^0.469.0 |
+| UI / primitives Radix | `@radix-ui/react-dialog`, `-dropdown-menu`, `-separator`, `-tabs`, `-tooltip` | ^1.1 – ^2.1 |
+| Graphes | `recharts` | ^2.15.4 |
 | ORM / DB | `@prisma/client` | ^6.2.1 (généré v6.19.3) |
 | ORM / DB | `prisma` (dev) | ^6.2.1 |
 | Email | `resend` | ^6.12.4 |
@@ -44,19 +47,20 @@
 payback/
 ├─ app/
 │  ├─ (auth)/            login, register (layout dédié centré)
-│  ├─ (dashboard)/       layout (sidebar + header + bandeau), force-dynamic
-│  │  ├─ dashboard/      KPIs
+│  ├─ (dashboard)/       layout (sidebar + header [+ burger mobile] + bandeau), force-dynamic
+│  │  ├─ dashboard/      KPIs + « à relancer aujourd'hui » + buckets d'ancienneté
 │  │  ├─ clients/        liste + new + [clientId] (+ edit)
 │  │  ├─ invoices/       liste + new + [invoiceId] (+ edit)
 │  │  ├─ reminders/      séquence + [sequenceId] (+ edit)
 │  │  ├─ templates/      liste + new + [templateId] (+ edit)
 │  │  └─ settings/       config envoi email
 │  ├─ api/health/        route de santé
-│  ├─ layout.tsx         root (police Inter, metadata)
+│  ├─ layout.tsx         root (polices Hanken Grotesk + Fraunces + IBM Plex Mono, metadata)
 │  └─ page.tsx           landing
 ├─ components/
-│  ├─ ui/                primitives (badge, button, card, input, label, select, table, textarea)
-│  ├─ layout/            sidebar, dashboard-header, sandbox-banner, page-placeholder
+│  ├─ ui/                primitives (badge, button, card, input, label, select, table, textarea,
+│  │                     tabs, dialog, dropdown-menu, separator, skeleton, tooltip, sheet, chart)
+│  ├─ layout/            sidebar, mobile-nav, dashboard-header, sandbox-banner, page-placeholder
 │  ├─ clients/ invoices/ reminders/ templates/ settings/   formulaires & boutons métier
 ├─ lib/                  prisma, current-organization, labels, navigation, constants, utils
 │  ├─ email/             config, resend (lazy), send-reminder-email
@@ -74,16 +78,16 @@ payback/
 | --- | --- |
 | `/` | Landing marketing (hero + 3 features + footer) |
 | `/login`, `/register` | Écrans auth **factices** (champs `disabled`, lien direct vers `/dashboard`) |
-| `/dashboard` | 4 KPIs (à recouvrer, en retard, payé, clients actifs) agrégés via Prisma |
+| `/dashboard` | 4 KPIs (à recouvrer, en retard, payé, clients actifs) + liste « à relancer aujourd'hui » (étapes éligibles) + 3 buckets d'ancienneté (0–30 / 31–60 / 61+ j, teintés seulement si non vides) |
 | `/clients` | Liste des clients de l'organisation |
 | `/clients/new` | Formulaire création client |
 | `/clients/[clientId]` | Détail client + ses factures |
 | `/clients/[clientId]/edit` | Édition client |
-| `/invoices` | Liste des factures avec statut affiché (OVERDUE calculé) |
+| `/invoices` | Liste des factures avec statut affiché (OVERDUE calculé) ; badge de statut en **pastille inline** (`flex flex-col items-start`, jamais étirée) + sous-texte « X jours de retard » discret |
 | `/invoices/new` | Formulaire création facture |
 | `/invoices/[invoiceId]` | Détail facture : relances disponibles (Simuler / Test / Client) + historique |
 | `/invoices/[invoiceId]/edit` | Édition facture |
-| `/reminders` | Séquence active + tableau des étapes + compteur factures éligibles |
+| `/reminders` | Séquence active + timeline des étapes + compteur factures éligibles |
 | `/reminders/[sequenceId]` | Détail séquence |
 | `/reminders/[sequenceId]/edit` | Édition des étapes (lignes dynamiques, JSON sérialisé) |
 | `/templates` | Liste des modèles de message |
@@ -101,36 +105,44 @@ payback/
 
 Oui, **Tailwind CSS v3** est le socle. `tailwind.config.ts` : `darkMode: ["class"]`, `container` centré (padding 2rem, max `2xl: 1400px`), couleurs mappées sur des **variables CSS HSL** (`hsl(var(--…))`), radius dérivés de `--radius`, keyframes/animations accordion, plugin `tailwindcss-animate`.
 
-Couleurs thématiques (toutes via variables) : `border, input, ring, background, foreground, primary, secondary, destructive, muted, accent, popover, card`.
+Couleurs thématiques (toutes via variables) : `border, input, ring, background, foreground, primary, secondary, destructive, success, warning, muted, accent, popover, card` (`success` et `warning` ajoutés à `theme.extend.colors`).
 
-`app/globals.css` définit les tokens (thème **slate**, `--radius: 0.5rem`) :
+`app/globals.css` définit les tokens — direction **« Confiance & calme »** (Encre / Papier / Brume / Sauge / Ambre / Brique), `--radius: 0.625rem` :
 
 ```css
 :root {
-  --background: 0 0% 100%;        --foreground: 222.2 84% 4.9%;
-  --primary: 222.2 47.4% 11.2%;   --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96.1%;     --muted-foreground: 215.4 16.3% 46.9%;
-  --destructive: 0 84.2% 60.2%;   --border: 214.3 31.8% 91.4%;
-  --ring: 222.2 84% 4.9%;         --radius: 0.5rem;
+  --background: 45 33% 98%;        /* Papier */    --foreground: 214 35% 14%;  /* Encre */
+  --primary: 213 52% 25%;          /* Encre */     --primary-foreground: 45 33% 98%;
+  --secondary: 43 20% 93%;         /* Brume */     --muted-foreground: 215 15% 42%;
+  --destructive: 11 58% 44%;       /* Brique */    --success: 152 30% 36%;     /* Sauge */
+  --warning: 36 64% 46%;           /* Ambre */     --border: 40 15% 87%;
+  --ring: 213 52% 25%;             --radius: 0.625rem;
   /* + card, popover, accent, input … */
 }
-.dark { /* palette sombre complète définie */ }
+/* Aucun bloc .dark : les tokens sombres ont été retirés → mode clair uniquement. */
 
 @layer base { * { @apply border-border; } body { @apply bg-background text-foreground; } }
 ```
 
 ### shadcn/ui
 
-Oui — `components.json` présent : style **new-york**, `rsc: true`, baseColor **slate**, cssVariables, alias `@/components/ui`, `iconLibrary: lucide`. (Aucune dépendance Radix listée dans `package.json` : les primitives présentes sont sans dépendance Radix.)
+Oui — `components.json` présent : style **new-york**, `rsc: true`, baseColor **slate** (héritage du générateur shadcn ; les tokens runtime sont la palette « Confiance & calme » ci-dessus), cssVariables, alias `@/components/ui`, `iconLibrary: lucide`. Plusieurs primitives s'appuient désormais sur **Radix** (`@radix-ui/react-dialog` — base du `sheet` —, `-dropdown-menu`, `-separator`, `-tabs`, `-tooltip`) et le wrapper `chart` sur **recharts**.
 
-Primitives existantes (`components/ui/`) : `badge`, `button` (CVA, variants), `card`, `input`, `label`, `select`, `table`, `textarea`.
+Primitives existantes (`components/ui/`) : `badge`, `button` (CVA, variants), `card`, `input`, `label`, `select`, `table`, `textarea`, `tabs`, `dialog`, `dropdown-menu`, `separator`, `skeleton`, `tooltip`, `sheet`, `chart`. (`skeleton` et `chart` sont présents mais **pas encore importés** dans l'app.)
+
+**Badge** (`components/ui/badge.tsx`, CVA) expose les variants : `default` (Encre), `secondary` (Brume), `destructive` (Brique), `success` (Sauge), `warning` (Ambre), `info` (Encre clair), `outline`. Le mapping statut → variant vit dans `lib/labels.ts` — factures : `DRAFT` secondary · `SENT` outline · `PENDING` warning · `OVERDUE` destructive · `PAID` success · `CANCELLED` secondary + texte rayé ; tons : `GENTLE` success · `PROFESSIONAL` secondary · `FIRM` destructive.
+
+En tableau, le badge de statut se rend en **pastille inline** (largeur du contenu, jamais étirée) : la cellule empile le badge et l'éventuel sous-texte « X jours de retard » (`text-xs text-muted-foreground`) via un conteneur `flex flex-col items-start`. Le rendu est **identique** entre la liste des factures (`/invoices`) et le tableau « Factures » du détail client (qui rend le `<Badge>` directement dans la cellule).
+
+**Cartes d'ancienneté (dashboard)** : la teinte d'alerte (Ambre pour `0–30 j`, Brique pour `31–60`/`61+`) n'est appliquée que si le bucket porte un encours réel (`count > 0 && amountCents > 0`) ; un bucket vide reste **neutre** (`bg-muted/40` + montant en `text-muted-foreground`). Les montants conservent `tabular-nums` dans tous les cas.
 
 ### Composants réutilisables (hors `ui/`)
 
 | Chemin | Rôle |
 | --- | --- |
 | `components/layout/sidebar.tsx` | Nav latérale (desktop ≥ md), surlignage actif via `usePathname` |
-| `components/layout/dashboard-header.tsx` | Titre/description de page dérivés de `dashboardNav` |
+| `components/layout/mobile-nav.tsx` | Menu burger mobile (`< md`) : `Sheet` reprenant `dashboardNav` |
+| `components/layout/dashboard-header.tsx` | Titre (`font-display`) + description de page dérivés de `dashboardNav` ; intègre le burger mobile |
 | `components/layout/sandbox-banner.tsx` | Bandeau état (démo amber / envoi réel emerald selon `emailSendingEnabled`) |
 | `components/layout/page-placeholder.tsx` | Bloc « module en préparation » (générique) |
 | `components/clients/client-form.tsx` | Formulaire client |
@@ -139,19 +151,19 @@ Primitives existantes (`components/ui/`) : `badge`, `button` (CVA, variants), `c
 | `components/invoices/send-test-email-button.tsx` | Bouton « Envoyer email test » |
 | `components/invoices/send-client-email-button.tsx` | Bouton « Envoyer au client » + récap garde-fous |
 | `components/reminders/sequence-form.tsx` | Édition d'étapes (lignes dynamiques) |
-| `components/reminders/sequence-steps-table.tsx` | Tableau d'étapes + `hasTemplateIssues` |
+| `components/reminders/sequence-timeline.tsx` | Timeline d'étapes (signature visuelle) + `hasTemplateIssues` |
 | `components/templates/template-form.tsx` | Formulaire modèle + preview live + chips variables |
 | `components/settings/email-settings-form.tsx` | Formulaire config envoi email |
 
 ### Thèmes / icônes / polices
 
-- **Thème clair/sombre** : tokens `.dark` définis dans `globals.css` et `darkMode: class`, mais **aucun toggle** ni `next-themes` : le mode sombre n'est jamais activé dynamiquement (pas de classe `dark` posée). De facto **clair uniquement**.
+- **Thème clair/sombre** : `darkMode: ["class"]` reste déclaré dans `tailwind.config.ts`, mais les tokens `.dark` ont été **retirés** de `globals.css` et il n'existe ni toggle ni `next-themes` → **mode clair uniquement** (la config `darkMode` et les quelques utilitaires `dark:` résiduels sont inertes).
 - **Icônes** : `lucide-react`.
-- **Police** : **Inter** via `next/font/google` (variable `--font-sans`, `subsets: ["latin"]`), appliquée sur `<body>` (`font-sans`). `<html lang="fr" suppressHydrationWarning>`.
+- **Polices** (via `next/font/google`, variables posées sur `<html>`) : **Hanken Grotesk** (`--font-sans`, corps & UI), **Fraunces** (`--font-display`, appliqué au `h1` du header de page `dashboard-header.tsx`, au `h1` du hero de la landing `app/page.tsx` et aux libellés d'étape « J+N » de la timeline ; les sous-titres de section `h2` restent en `font-sans font-semibold`), **IBM Plex Mono** (`--font-mono`, numéros de facture & identifiants). `<body className="font-sans antialiased">`, `<html lang="fr" suppressHydrationWarning>`.
 
 ### Construction d'une nouvelle page (aujourd'hui)
 
-Une page du dashboard est un **Server Component** (`async`) rendant `export const dynamic = "force-dynamic"`, qui résout l'organisation via `getCurrentOrganization()` puis interroge Prisma directement. Le `(dashboard)/layout.tsx` fournit sidebar + header + `SandboxBanner`. La page compose des primitives `components/ui/*` (Card, Table, Badge, Button) ; les interactions (formulaires, confirmations) passent par des **client components** dédiés branchés sur des **server actions** (`useActionState` ou `form action={…}`). La validation se fait côté serveur avec un schéma **zod** de `lib/validations/`.
+Une page du dashboard est un **Server Component** (`async`) rendant `export const dynamic = "force-dynamic"`, qui résout l'organisation via `getCurrentOrganization()` puis interroge Prisma directement. Le `(dashboard)/layout.tsx` fournit sidebar (desktop) + header (avec burger mobile `Sheet`) + `SandboxBanner`. La page compose des primitives `components/ui/*` (Card, Table, Badge, Button…) ; les interactions (formulaires, confirmations) passent par des **client components** dédiés branchés sur des **server actions** (`useActionState` ou `form action={…}`). La validation se fait côté serveur avec un schéma **zod** de `lib/validations/`.
 
 ---
 
@@ -231,9 +243,8 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 - `lib/current-organization.ts` — helper **TEMPORAIRE** (org de démo figée) → à remplacer par la session auth réelle.
 - `lib/constants.ts` — `DEMO_*` « À SUPPRIMER lors de l'intégration de l'auth réelle ».
 - `app/(auth)/login` & `register` — formulaires **factices** (champs `disabled`, pas de soumission).
-- `components/layout/page-placeholder.tsx` — bloc « module en préparation » (générique ; plus référencé par `/settings` désormais, vérifier autres usages).
+- `components/layout/page-placeholder.tsx` — bloc « module en préparation » **désormais orphelin** (aucun import dans `app/` ni `components/`) → supprimable.
 - `Invoice.paymentUrl` — liens de paiement **factices** dans le seed (pas de Stripe).
-- `dashboard/page.tsx` — texte « Les relances automatiques (email/SMS) … prochaine étape ».
 - Aucun `TODO`/`FIXME` littéral dans le code (les marqueurs sont des commentaires « temporaire / à venir / À SUPPRIMER »).
 
 ---
@@ -242,11 +253,11 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 ### 5 faiblesses UX/UI observées dans le code
 
-1. **Mode sombre fantôme** : palette `.dark` complète mais aucun toggle ni `next-themes` → effort mort, l'utilisateur ne peut pas l'activer.
+1. **Config `darkMode` résiduelle** : `darkMode: ["class"]` subsiste dans `tailwind.config.ts` (et quelques utilitaires `dark:` traînent dans des composants) alors que les tokens `.dark` ont été retirés et qu'aucun toggle n'existe → config morte à nettoyer.
 2. **Auth trompeuse** : `/login`/`/register` ont des champs `disabled` et un bouton qui ouvre le dashboard sans contrôle — confus et non sécurisé (aucune route protégée).
-3. **Devise incohérente** : seed en `CAD`, `formatCurrency`/`Payment` par défaut `EUR`, dashboard prend « la devise de la première facture » → risque d'agrégats mélangeant des devises sans conversion.
-4. **Pas d'états vides/chargement homogènes** : plusieurs pages s'appuient sur des messages ad hoc (« Lancez le seed… ») ; pas de squelettes de chargement (tout est `force-dynamic`, donc latence DB visible sans feedback).
-5. **Responsive partiel** : la `Sidebar` est `hidden … md:flex` mais il n'y a **aucune navigation mobile** de remplacement (pas de menu burger) → sur mobile, la nav disparaît.
+3. **Devise incohérente** : seed en `CAD`, `formatCurrency`/`Payment` par défaut `EUR`, dashboard (KPIs + buckets d'ancienneté) prend « la devise de la première facture » → risque d'agrégats mélangeant des devises sans conversion.
+4. **États vides ad hoc** : certaines pages s'appuient encore sur des messages bruts (« Lancez le seed pour créer la séquence… » dans `/reminders`) plutôt qu'un état vide guidant l'action (le dashboard, lui, a désormais un état vide calme).
+5. **Pas de feedback de chargement** : la primitive `skeleton` a été ajoutée mais n'est importée nulle part et aucune section data n'est enveloppée dans `<Suspense>` → les pages `force-dynamic` affichent la latence DB sans squelette.
 
 ### 5 quick wins techniques
 
@@ -264,4 +275,4 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 2. **Cœur métier relances opérationnel** : clients/factures/templates/séquence CRUD, simulation locale, email **test** et email **client** (opt-in `emailSendingEnabled` + confirmation), historique tracé.
 3. **Resend est la seule intégration réelle** ; Stripe, Twilio et Supabase ne sont que des noms de variables réservés.
 4. **Pas d'auth ni de vrai multi-tenant** : une org de démo figée via un helper temporaire ; routes dashboard non protégées.
-5. **Dette principale** : aucun test, pas de cron (tout manuel), mode sombre inutilisé, incohérence de devise, et écrans d'auth factices à remplacer.
+5. **Dette principale** : aucun test, pas de cron (tout manuel), reliquat de config `darkMode`, incohérence de devise, et écrans d'auth factices à remplacer.

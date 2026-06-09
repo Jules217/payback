@@ -15,6 +15,7 @@ import {
   clientStatusVariants,
   invoiceStatusLabels,
   invoiceStatusVariants,
+  invoiceStatusBadgeClasses,
 } from "@/lib/labels";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -162,7 +163,7 @@ export default async function ClientDetailPage({ params }: PageProps) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Numéro</TableHead>
-                  <TableHead>Montant</TableHead>
+                  <TableHead className="text-right">Montant</TableHead>
                   <TableHead>Échéance</TableHead>
                   <TableHead>Statut</TableHead>
                   <TableHead className="text-right">Action</TableHead>
@@ -173,17 +174,20 @@ export default async function ClientDetailPage({ params }: PageProps) {
                   const shown = displayStatus(invoice);
                   return (
                     <TableRow key={invoice.id}>
-                      <TableCell className="font-medium">
+                      <TableCell className="font-mono font-medium">
                         {invoice.number}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="text-right tabular-nums">
                         {formatCurrency(invoice.amountCents, invoice.currency)}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatDate(invoice.dueAt)}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={invoiceStatusVariants[shown]}>
+                        <Badge
+                          variant={invoiceStatusVariants[shown]}
+                          className={invoiceStatusBadgeClasses[shown]}
+                        >
                           {invoiceStatusLabels[shown]}
                         </Badge>
                       </TableCell>
