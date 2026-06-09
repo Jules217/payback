@@ -42,6 +42,8 @@ export type ReminderEventStatus =
   | "FAILED"
   | "CANCELLED";
 
+export type ReminderDeliveryMode = "SIMULATION" | "TEST" | "CLIENT";
+
 // ── Entités ───────────────────────────────────────────────────
 
 export interface User {
@@ -56,6 +58,9 @@ export interface Organization {
   id: ID;
   name: string;
   email?: string | null;
+  emailSendingEnabled: boolean;
+  emailFromName?: string | null;
+  emailReplyTo?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -155,6 +160,10 @@ export interface ReminderEvent {
   providerMessageId?: string | null;
   /** Message d'erreur en cas d'échec d'envoi (status FAILED). */
   errorMessage?: string | null;
+  /** Adresse réellement (ou théoriquement) destinataire. */
+  recipientEmail?: string | null;
+  /** Mode d'acheminement : simulation locale, email de test ou envoi client. */
+  deliveryMode?: ReminderDeliveryMode | null;
   createdAt: Date;
 }
 

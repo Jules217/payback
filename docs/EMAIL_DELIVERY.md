@@ -1,9 +1,27 @@
-# Envoi d'emails (Resend) — mode test sécurisé
+# Envoi d'emails (Resend) — simulation, test et envoi client
 
-Cette étape ajoute l'**envoi réel d'emails de relance via [Resend](https://resend.com)**,
-mais dans un cadre strictement sécurisé : un email réel ne part que vers une
-**adresse de test** définie dans l'environnement. **Aucun vrai client n'est
-contacté** à ce stade.
+Payback distingue **trois modes d'acheminement** d'une relance, du plus sûr au
+plus engageant :
+
+| Mode             | Email réel ? | Destinataire             | Garde-fou principal                          |
+| ---------------- | ------------ | ------------------------ | -------------------------------------------- |
+| **Simulation**   | Non          | _(aucun)_                | Aucun envoi — journalise seulement le rendu  |
+| **Email test**   | Oui          | `RESEND_TEST_RECIPIENT`  | Ne part **jamais** vers un vrai client       |
+| **Envoi client** | Oui          | `client.email`           | Opt-in `emailSendingEnabled` + confirmation  |
+
+> ⚠️ **Aucun envoi automatique** : il n'existe pas de cron. Tout envoi (test ou
+> client) est déclenché manuellement depuis l'interface, après confirmation.
+
+## 0. Différence entre les trois modes
+
+- **Simulation** — « Simuler la relance ». Rend le template et enregistre un
+  `ReminderEvent` `SIMULATED`. Rien n'est envoyé ; sert à prévisualiser/journaliser.
+- **Email test** — « Envoyer email test ». Envoie un vrai email **uniquement**
+  vers `RESEND_TEST_RECIPIENT`. Permet de valider le rendu réel sans risque.
+- **Envoi client** — « Envoyer au client ». Envoie un vrai email à `client.email`.
+  Impossible tant que l'organisation n'a pas **activé l'envoi réel** dans
+  `/settings`, et toujours soumis à une **confirmation manuelle** récapitulant le
+  destinataire.
 
 ## 1. Variables d'environnement
 
@@ -56,39 +74,81 @@ l'action d'envoi de test échoue, avec un message d'erreur propre.
 Si `RESEND_TEST_RECIPIENT` n'est pas configuré, le bouton est **désactivé** avec
 un message indiquant la variable à renseigner.
 
-## 4. Statuts d'événement : SIMULATED / SENT / FAILED
+## 4. Activer l'envoi réel aux clients
 
-| Statut      | Action déclenchante      | Email réel ? | Champs notables                       |
-| ----------- | ------------------------ | ------------ | ------------------------------------- |
-| `SIMULATED` | « Simuler la relance »   | Non          | sujet + corps rendus                  |
-| `SENT`      | « Envoyer email test »   | Oui (test)   | sujet + corps + `providerMessageId`   |
-| `FAILED`    | « Envoyer email test »   | Tentative    | sujet + corps + `errorMessage`        |
+Prérequis pour qu'un email puisse partir vers `client.email` :
 
-La **simulation** reste inchangée et indépendante : elle n'envoie rien et sert à
-prévisualiser/journaliser un message.
+1. **Resend configuré** : `RESEND_API_KEY` et `RESEND_FROM_EMAIL` présents (voir §1).
+2. **Opt-in organisation** : sur `/settings`, section **Envoi email**, cocher
+   **« Activer l'envoi réel aux clients »** puis enregistrer.
+   - Tant que cette case est décochée (`emailSendingEnabled = false`, valeur par
+     défaut), **aucun** email ne peut partir vers un client — l'action serveur
+     refuse et le bouton « Envoyer au client » est désactivé.
+   - Optionnel : **nom d'expéditeur** (`emailFromName`) et **reply-to**
+     (`emailReplyTo`, email valide) sont appliqués aux envois client.
+3. **Client avec email** : la facture doit pointer vers un client ayant une
+   adresse email.
 
-## 5. Anti-doublon
+Ces réglages sont stockés sur l'`Organization` (champs `emailSendingEnabled`,
+`emailFromName`, `emailReplyTo`). Le bandeau du dashboard change de texte une fois
+l'envoi réel activé.
 
-- **Simulation** : anti-doublon **strict** conservé — une étape (un `offsetDays`)
-  déjà simulée ou envoyée ne peut pas être re-simulée (le bouton « Simuler »
+## 5. Tester un envoi au client
+
+1. Activer l'envoi réel dans `/settings` (voir §4).
+2. Ouvrir une facture **en retard** dont le client a une adresse email.
+3. Section **Relances disponibles** → bouton **« Envoyer au client »**.
+4. Un récapitulatif **obligatoire** affiche : nom du client, **email
+   destinataire**, numéro de facture, montant, étape (J+7/J+14/J+30), sujet
+   rendu, et le rappel « Cette action enverra un vrai email au client. ».
+5. Confirmer → l'email part vers `client.email` (jamais l'adresse de test).
+6. Le résultat est journalisé en mode **CLIENT** : statut **Envoyée client** +
+   `providerMessageId`, ou **Échouée (client)** + `errorMessage`. Le destinataire
+   réel apparaît dans l'historique.
+
+## 6. Statuts et modes d'événement
+
+Chaque `ReminderEvent` porte un `deliveryMode` (`SIMULATION` / `TEST` / `CLIENT`)
+et un `recipientEmail` pour savoir où l'email est (ou serait) parti.
+
+| Libellé historique | Statut + mode      | Email réel ? | Destinataire            |
+| ------------------ | ------------------ | ------------ | ----------------------- |
+| Simulée            | `SIMULATED` / SIM. | Non          | _(théorique : client)_  |
+| Envoyée test       | `SENT` / TEST      | Oui          | `RESEND_TEST_RECIPIENT` |
+| Envoyée client     | `SENT` / CLIENT    | Oui          | `client.email`          |
+| Échouée (test)     | `FAILED` / TEST    | Tentative    | `RESEND_TEST_RECIPIENT` |
+| Échouée (client)   | `FAILED` / CLIENT  | Tentative    | `client.email`          |
+
+## 7. Anti-doublon
+
+- **Simulation** : anti-doublon **strict** — une étape (`offsetDays`) déjà
+  simulée ou envoyée ne peut pas être re-simulée (le bouton « Simuler »
   disparaît, l'action refuse).
 - **Envoi de test** : **pas** d'anti-doublon serveur, afin de pouvoir retester
-  une étape même si une simulation/un envoi existe déjà. Le garde-fou est la
-  **confirmation explicite obligatoire** dans l'UI avant chaque envoi. On évite
-  ainsi de bloquer les tests tout en empêchant les envois accidentels en rafale.
+  une étape même si une simulation/un envoi existe déjà. Garde-fou = confirmation
+  explicite obligatoire dans l'UI.
+- **Envoi client** : un **second envoi client réussi** pour le même
+  `offsetDays` est **bloqué** (le bouton devient « Envoyé au client » désactivé,
+  l'action refuse). Un nouvel essai reste possible si le **dernier envoi client a
+  échoué** (`FAILED`). Les simulations et emails de test sont comptabilisés
+  séparément (filtrés par `deliveryMode = CLIENT`).
 
-## 6. Garanties à cette étape
+## 8. Garanties
 
-- Les emails de test partent **exclusivement** vers `RESEND_TEST_RECIPIENT` ;
-  `client.email` n'est **jamais** utilisé comme destinataire.
+- Un email **client** ne part **jamais** tant que `emailSendingEnabled = false`.
+- Un email **test** part **exclusivement** vers `RESEND_TEST_RECIPIENT` ;
+  `client.email` n'est jamais utilisé en mode test.
+- L'envoi client n'utilise **jamais** `RESEND_TEST_RECIPIENT`.
+- **Aucun envoi automatique** : pas de cron, tout passe par une confirmation
+  manuelle.
 - Resend est appelé **côté serveur uniquement** ; la clé n'est jamais exposée au
-  client.
+  client ni journalisée.
 - `npm run db:generate`, `npm run typecheck` et `npm run build` passent **sans**
   vraie clé Resend.
 - **Ne jamais committer `.env`.**
 
-## 7. Étapes suivantes (hors périmètre actuel)
+## 9. Étapes suivantes (hors périmètre actuel)
 
-- Envoi vers le vrai `client.email` (avec garde-fous d'opt-in / environnement).
 - Déclenchement automatique (cron) sur l'infrastructure `eligibleSteps` existante.
 - SMS (Twilio), webhooks de statut Resend (bounce/délivrabilité).
+- Authentification réelle / multi-tenant (remplace l'organisation de démo).

@@ -85,8 +85,15 @@ async function main() {
   // Organisation de démonstration
   const org = await prisma.organization.upsert({
     where: { id: DEMO_ORG_ID },
+    // On ne touche pas à `emailSendingEnabled` dans `update` : un re-seed ne doit
+    // jamais réactiver/réinitialiser le choix d'envoi fait par l'utilisateur.
     update: { name: DEMO_ORG_NAME, email: DEMO_ORG_EMAIL },
-    create: { id: DEMO_ORG_ID, name: DEMO_ORG_NAME, email: DEMO_ORG_EMAIL },
+    create: {
+      id: DEMO_ORG_ID,
+      name: DEMO_ORG_NAME,
+      email: DEMO_ORG_EMAIL,
+      emailSendingEnabled: false,
+    },
   });
   console.log(`🏢 Organisation: ${org.name}`);
 

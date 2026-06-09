@@ -6,6 +6,7 @@ import type {
   ReminderChannel,
   ReminderTone,
   ReminderEventStatus,
+  ReminderDeliveryMode,
 } from "@/types";
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
@@ -92,6 +93,36 @@ export const reminderEventStatusVariants: Record<
   FAILED: "destructive",
   CANCELLED: "outline",
 };
+
+export const reminderDeliveryModeLabels: Record<ReminderDeliveryMode, string> = {
+  SIMULATION: "Simulation",
+  TEST: "Test",
+  CLIENT: "Client",
+};
+
+/**
+ * Libellé précis d'un événement combinant statut et mode d'acheminement, pour
+ * l'historique : « Simulée », « Envoyée test », « Envoyée client », « Échouée ».
+ *
+ * `deliveryMode` peut être null pour les événements créés avant son ajout :
+ * on retombe alors sur le seul libellé de statut.
+ */
+export function reminderEventLabel(
+  status: ReminderEventStatus,
+  deliveryMode?: ReminderDeliveryMode | null
+): string {
+  if (status === "SENT") {
+    if (deliveryMode === "CLIENT") return "Envoyée client";
+    if (deliveryMode === "TEST") return "Envoyée test";
+    return "Envoyée";
+  }
+  if (status === "FAILED") {
+    if (deliveryMode === "CLIENT") return "Échouée (client)";
+    if (deliveryMode === "TEST") return "Échouée (test)";
+    return "Échouée";
+  }
+  return reminderEventStatusLabels[status];
+}
 
 /** Libellé court d'une étape par décalage de jours : 7 → « J+7 ». */
 export function stepOffsetLabel(offsetDays: number): string {

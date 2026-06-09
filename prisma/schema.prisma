@@ -30,6 +30,16 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // ── Configuration d'envoi email ───────────────────────────────
+  // Opt-in explicite : tant que false, aucun email ne peut partir vers
+  // `client.email` (seuls la simulation locale et l'email de test restent
+  // possibles). Voir docs/EMAIL_DELIVERY.md.
+  emailSendingEnabled Boolean @default(false)
+  /** Nom d'expéditeur affiché (remplace le display name de RESEND_FROM_EMAIL). */
+  emailFromName String?
+  /** Adresse reply-to appliquée aux relances envoyées aux clients. */
+  emailReplyTo String?
+
   members           Membership[]
   clients           Client[]
   invoices          Invoice[]
@@ -246,6 +256,10 @@ model ReminderEvent {
   providerMessageId String?
   /** Message d'erreur en cas d'échec d'envoi (status FAILED). */
   errorMessage      String?
+  /** Adresse réellement (ou théoriquement) destinataire, pour savoir où l'email est parti. */
+  recipientEmail    String?
+  /** Distingue simulation locale, email de test et envoi réel au client. */
+  deliveryMode      ReminderDeliveryMode?
   createdAt      DateTime            @default(now())
 
   @@index([organizationId])
@@ -258,4 +272,11 @@ enum ReminderEventStatus {
   SENT
   FAILED
   CANCELLED
+}
+
+/** Mode d'acheminement d'un ReminderEvent (où/comment l'email est parti). */
+enum ReminderDeliveryMode {
+  SIMULATION
+  TEST
+  CLIENT
 }

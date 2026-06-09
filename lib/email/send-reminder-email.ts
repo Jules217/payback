@@ -9,7 +9,7 @@ import { EmailConfigError, getResendClient } from "./resend";
 import { getFromEmail } from "./config";
 
 export type SendReminderEmailInput = {
-  /** Destinataire réel de l'email (à cette étape : toujours l'adresse de test). */
+  /** Destinataire réel de l'email (adresse de test ou, en mode client, client.email). */
   to: string;
   /** Sujet déjà rendu (variables interpolées). */
   subject: string;
@@ -18,6 +18,10 @@ export type SendReminderEmailInput = {
   invoice: RenderInvoice;
   client: RenderClient;
   organization: RenderOrganization;
+  /** Nom d'expéditeur facultatif : remplace le display name de RESEND_FROM_EMAIL. */
+  fromName?: string | null;
+  /** Adresse reply-to facultative. */
+  replyTo?: string | null;
 };
 
 export type SendReminderEmailResult = {
@@ -34,6 +38,19 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * Applique un nom d'expéditeur au champ `from`.
+ *
+ * `from` peut déjà contenir un display name (« Payback <addr> ») : on en extrait
+ * l'adresse puis on reconstruit « Nom <addr> ». Sans nom, on renvoie `from` tel quel.
+ */
+function applyFromName(from: string, name?: string | null): string {
+  if (!name || !name.trim()) return from;
+  const match = from.match(/<([^>]+)>/);
+  const address = (match ? match[1] : from).trim();
+  return `${name.trim()} <${address}>`;
 }
 
 /** Version texte : corps rendu + signature simple. */
@@ -77,12 +94,14 @@ export async function sendReminderEmail(
 
   try {
     const resend = getResendClient();
+    const replyTo = input.replyTo?.trim();
     const { data, error } = await resend.emails.send({
-      from,
+      from: applyFromName(from, input.fromName),
       to: input.to,
       subject: input.subject,
       text: buildText(input),
       html: buildHtml(input),
+      ...(replyTo ? { replyTo } : {}),
     });
 
     if (error) {

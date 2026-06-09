@@ -23,16 +23,18 @@ import {
 import {
   simulateReminderForInvoice,
   sendTestReminderForInvoice,
+  sendClientReminderForInvoice,
 } from "@/app/(dashboard)/reminders/actions";
 import { SimulateButton } from "@/components/invoices/simulate-button";
 import { SendTestEmailButton } from "@/components/invoices/send-test-email-button";
+import { SendClientEmailButton } from "@/components/invoices/send-client-email-button";
 import { getTestRecipient } from "@/lib/email/config";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   invoiceStatusLabels,
   invoiceStatusVariants,
-  reminderEventStatusLabels,
   reminderEventStatusVariants,
+  reminderEventLabel,
   reminderToneLabels,
   reminderToneVariants,
   reminderChannelLabels,
@@ -142,6 +144,14 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
 
   // Étapes déjà consommées (simulées ou envoyées) — anti-doublon de la simulation.
   const done = consumedOffsets(invoice.reminderEvents);
+
+  // Décalages déjà envoyés AU CLIENT avec succès — anti-doublon de l'envoi réel.
+  const clientSentOffsets = new Set(
+    invoice.reminderEvents
+      .filter((e) => e.deliveryMode === "CLIENT" && e.status === "SENT")
+      .map((e) => e.offsetDays)
+      .filter((o): o is number => o != null)
+  );
 
   // Adresse de test (RESEND_TEST_RECIPIENT) — null si l'envoi n'est pas configuré.
   const testRecipient = getTestRecipient();
@@ -317,7 +327,10 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
             <span className="font-medium">Simuler</span> enregistre un événement
             sans rien envoyer ;{" "}
             <span className="font-medium">Envoyer email test</span> envoie un
-            vrai email, uniquement à l&apos;adresse de test.
+            vrai email, uniquement à l&apos;adresse de test ;{" "}
+            <span className="font-medium">Envoyer au client</span> envoie un vrai
+            email à l&apos;adresse du client (envoi réel à activer dans les
+            Paramètres).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -390,6 +403,11 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                   invoice.id,
                   step.offsetDays
                 );
+                const sendClient = sendClientReminderForInvoice.bind(
+                  null,
+                  invoice.id,
+                  step.offsetDays
+                );
                 const label = stepOffsetLabel(step.offsetDays);
                 const ChannelIcon =
                   step.template?.channel === "SMS" ? MessageSquare : Mail;
@@ -443,6 +461,20 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                           testRecipient={testRecipient}
                           stepLabel={label}
                         />
+                        <SendClientEmailButton
+                          action={sendClient}
+                          emailSendingEnabled={org.emailSendingEnabled}
+                          clientEmail={invoice.client.email ?? null}
+                          clientName={invoice.client.name}
+                          invoiceNumber={invoice.number}
+                          amountLabel={formatCurrency(
+                            invoice.amountCents,
+                            invoice.currency
+                          )}
+                          stepLabel={label}
+                          subject={rendered.subject}
+                          alreadySent={clientSentOffsets.has(step.offsetDays)}
+                        />
                       </div>
                     </div>
 
@@ -480,8 +512,10 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
           <CardDescription>
             Relances enregistrées pour cette facture.{" "}
             <span className="font-medium">Simulée</span> = aucun envoi réel ;{" "}
-            <span className="font-medium">Envoyée</span> = email de test parti
-            vers l&apos;adresse de test ;{" "}
+            <span className="font-medium">Envoyée test</span> = email parti vers
+            l&apos;adresse de test ;{" "}
+            <span className="font-medium">Envoyée client</span> = email réel
+            envoyé au client ;{" "}
             <span className="font-medium">Échouée</span> = erreur d&apos;envoi
             (détail ci-dessous).
           </CardDescription>
@@ -514,7 +548,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                       <Badge
                         variant={reminderEventStatusVariants[event.status]}
                       >
-                        {reminderEventStatusLabels[event.status]}
+                        {reminderEventLabel(event.status, event.deliveryMode)}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
@@ -532,6 +566,11 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                       {event.messageBody ? (
                         <p className="truncate text-xs text-muted-foreground">
                           {event.messageBody.replace(/\s+/g, " ").trim()}
+                        </p>
+                      ) : null}
+                      {event.recipientEmail ? (
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                          → {event.recipientEmail}
                         </p>
                       ) : null}
                       {event.providerMessageId ? (
