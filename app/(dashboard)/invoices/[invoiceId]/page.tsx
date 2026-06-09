@@ -20,8 +20,13 @@ import {
   markInvoiceAsPaid,
   cancelInvoice,
 } from "@/app/(dashboard)/invoices/actions";
-import { simulateReminderForInvoice } from "@/app/(dashboard)/reminders/actions";
+import {
+  simulateReminderForInvoice,
+  sendTestReminderForInvoice,
+} from "@/app/(dashboard)/reminders/actions";
 import { SimulateButton } from "@/components/invoices/simulate-button";
+import { SendTestEmailButton } from "@/components/invoices/send-test-email-button";
+import { getTestRecipient } from "@/lib/email/config";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   invoiceStatusLabels,
@@ -34,7 +39,7 @@ import {
   stepOffsetLabel,
 } from "@/lib/labels";
 import { displayStatus, daysOverdue } from "@/lib/invoices/status";
-import { eligibleSteps, consumedOffsets } from "@/lib/reminders/eligible-steps";
+import { consumedOffsets } from "@/lib/reminders/eligible-steps";
 import { renderTemplate } from "@/lib/reminders/render-template";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -84,20 +89,20 @@ type ReminderCase =
   | "cancelled"
   | "not_overdue"
   | "no_active_steps"
-  | "all_done"
+  | "no_step_reached"
   | "available";
 
 function getReminderCase(params: {
   status: string;
   late: number;
   simulableCount: number;
-  applicableCount: number;
+  reachedCount: number;
 }): ReminderCase {
   if (params.status === "PAID") return "paid";
   if (params.status === "CANCELLED") return "cancelled";
   if (params.late === 0) return "not_overdue";
   if (params.simulableCount === 0) return "no_active_steps";
-  if (params.applicableCount === 0) return "all_done";
+  if (params.reachedCount === 0) return "no_step_reached";
   return "available";
 }
 
@@ -130,35 +135,46 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
     },
   });
 
-  // Seules les étapes actives disposant d'un modèle peuvent être simulées.
+  // Seules les étapes actives disposant d'un modèle peuvent être simulées/envoyées.
   const simulableSteps = (sequence?.steps ?? []).filter(
     (s) => s.isActive && s.templateId
   );
 
-  const applicableSteps = eligibleSteps(
-    invoice,
-    simulableSteps,
-    invoice.reminderEvents
-  ).map((step) => ({
-    step,
-    rendered: renderTemplate({
-      subjectTemplate: step.template?.subject ?? "",
-      bodyTemplate: step.template?.body ?? "",
-      invoice,
-      client: invoice.client,
-      organization: org,
-    }),
-  }));
+  // Étapes déjà consommées (simulées ou envoyées) — anti-doublon de la simulation.
+  const done = consumedOffsets(invoice.reminderEvents);
+
+  // Adresse de test (RESEND_TEST_RECIPIENT) — null si l'envoi n'est pas configuré.
+  const testRecipient = getTestRecipient();
+
+  // Étapes dont le décalage est atteint par le retard. Indépendant de
+  // l'historique : une étape déjà simulée reste listée pour permettre un envoi
+  // de test, mais son bouton « Simuler » est masqué (anti-doublon strict).
+  const reachedSteps = simulableSteps
+    .filter((s) => s.offsetDays > 0 && late >= s.offsetDays)
+    .sort((a, b) => a.offsetDays - b.offsetDays)
+    .map((step) => ({
+      step,
+      consumed: done.has(step.offsetDays),
+      rendered: renderTemplate({
+        subjectTemplate: step.template?.subject ?? "",
+        bodyTemplate: step.template?.body ?? "",
+        invoice,
+        client: invoice.client,
+        organization: org,
+      }),
+    }));
 
   const reminderCase = getReminderCase({
     status: invoice.status,
     late,
     simulableCount: simulableSteps.length,
-    applicableCount: applicableSteps.length,
+    reachedCount: reachedSteps.length,
   });
 
-  // Étapes déjà consommées (pour le message "all_done")
-  const done = consumedOffsets(invoice.reminderEvents);
+  // Plus petit décalage configuré (pour le message "pas encore atteint").
+  const nextOffset = simulableSteps.length
+    ? Math.min(...simulableSteps.map((s) => s.offsetDays))
+    : null;
 
   // Jours restants avant l'échéance (négatif = dépassé)
   const daysUntilDue = Math.ceil(
@@ -297,8 +313,11 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
         <CardHeader>
           <CardTitle>Relances disponibles</CardTitle>
           <CardDescription>
-            Étapes applicables selon le retard et l&apos;historique. La
-            simulation enregistre un événement sans envoyer de message réel.
+            Étapes applicables selon le retard.{" "}
+            <span className="font-medium">Simuler</span> enregistre un événement
+            sans rien envoyer ;{" "}
+            <span className="font-medium">Envoyer email test</span> envoie un
+            vrai email, uniquement à l&apos;adresse de test.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -347,26 +366,26 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                 )}
               </span>
             </div>
-          ) : reminderCase === "all_done" ? (
+          ) : reminderCase === "no_step_reached" ? (
             <div className="flex items-start gap-2 text-sm text-muted-foreground">
-              <CheckCheck className="mt-0.5 size-4 shrink-0 text-green-600" />
+              <Clock className="mt-0.5 size-4 shrink-0" />
               <span>
-                Toutes les étapes disponibles ont déjà été simulées pour cette
-                facture{" "}
-                {done.size > 0
-                  ? `(${[...done]
-                      .sort((a, b) => a - b)
-                      .map(stepOffsetLabel)
-                      .join(", ")})`
-                  : ""}
-                .
+                En retard de {late} jour{late > 1 ? "s" : ""}, mais la première
+                étape de relance{" "}
+                {nextOffset != null ? `(${stepOffsetLabel(nextOffset)}) ` : ""}
+                n&apos;est pas encore atteinte.
               </span>
             </div>
           ) : (
             /* reminderCase === "available" */
             <ul className="space-y-4">
-              {applicableSteps.map(({ step, rendered }) => {
+              {reachedSteps.map(({ step, rendered, consumed }) => {
                 const simulate = simulateReminderForInvoice.bind(
+                  null,
+                  invoice.id,
+                  step.offsetDays
+                );
+                const sendTest = sendTestReminderForInvoice.bind(
                   null,
                   invoice.id,
                   step.offsetDays
@@ -392,6 +411,12 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                               ? reminderChannelLabels[step.template.channel]
                               : "Email"}
                           </Badge>
+                          {consumed ? (
+                            <Badge variant="secondary" className="gap-1">
+                              <CheckCheck className="size-3" />
+                              Déjà traitée
+                            </Badge>
+                          ) : null}
                         </div>
                         {step.template ? (
                           <p className="text-xs text-muted-foreground">
@@ -405,7 +430,20 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                           </p>
                         ) : null}
                       </div>
-                      <SimulateButton action={simulate} stepLabel={label} />
+                      <div className="flex flex-col items-end gap-2">
+                        {consumed ? (
+                          <p className="text-xs text-muted-foreground">
+                            Simulation déjà enregistrée.
+                          </p>
+                        ) : (
+                          <SimulateButton action={simulate} stepLabel={label} />
+                        )}
+                        <SendTestEmailButton
+                          action={sendTest}
+                          testRecipient={testRecipient}
+                          stepLabel={label}
+                        />
+                      </div>
                     </div>
 
                     {/* Aperçu repliable */}
@@ -440,9 +478,12 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
         <CardHeader>
           <CardTitle>Historique des relances</CardTitle>
           <CardDescription>
-            Relances enregistrées pour cette facture. Le statut{" "}
-            <span className="font-medium">Simulée</span> indique qu&apos;aucun
-            email ni SMS réel n&apos;a été envoyé.
+            Relances enregistrées pour cette facture.{" "}
+            <span className="font-medium">Simulée</span> = aucun envoi réel ;{" "}
+            <span className="font-medium">Envoyée</span> = email de test parti
+            vers l&apos;adresse de test ;{" "}
+            <span className="font-medium">Échouée</span> = erreur d&apos;envoi
+            (détail ci-dessous).
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -491,6 +532,16 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                       {event.messageBody ? (
                         <p className="truncate text-xs text-muted-foreground">
                           {event.messageBody.replace(/\s+/g, " ").trim()}
+                        </p>
+                      ) : null}
+                      {event.providerMessageId ? (
+                        <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                          ID : {event.providerMessageId}
+                        </p>
+                      ) : null}
+                      {event.errorMessage ? (
+                        <p className="mt-0.5 text-xs text-destructive">
+                          Erreur : {event.errorMessage}
                         </p>
                       ) : null}
                     </TableCell>

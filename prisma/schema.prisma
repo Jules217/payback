@@ -242,6 +242,10 @@ model ReminderEvent {
   offsetDays     Int?
   messageSubject String?
   messageBody    String?
+  /** Identifiant du message renvoyé par le fournisseur (Resend) en cas de succès. */
+  providerMessageId String?
+  /** Message d'erreur en cas d'échec d'envoi (status FAILED). */
+  errorMessage      String?
   createdAt      DateTime            @default(now())
 
   @@index([organizationId])

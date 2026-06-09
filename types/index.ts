@@ -151,6 +151,10 @@ export interface ReminderEvent {
   offsetDays?: number | null;
   messageSubject?: string | null;
   messageBody?: string | null;
+  /** Identifiant du message côté fournisseur (Resend) en cas de succès. */
+  providerMessageId?: string | null;
+  /** Message d'erreur en cas d'échec d'envoi (status FAILED). */
+  errorMessage?: string | null;
   createdAt: Date;
 }
 

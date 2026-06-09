@@ -8,11 +8,18 @@ import { getCurrentOrganization } from "@/lib/current-organization";
 import { renderTemplate } from "@/lib/reminders/render-template";
 import { canBeReminded, consumedOffsets } from "@/lib/reminders/eligible-steps";
 import { sequenceFormSchema } from "@/lib/validations/sequence";
+import { sendReminderEmail } from "@/lib/email/send-reminder-email";
+import { getTestRecipient } from "@/lib/email/config";
 
 export type SequenceFormState = {
   ok: boolean;
   message?: string;
   values?: Record<string, string>;
+};
+
+export type SendTestState = {
+  ok: boolean;
+  message?: string;
 };
 
 /**
@@ -79,6 +86,125 @@ export async function simulateReminderForInvoice(
 
   revalidatePath(`/invoices/${invoice.id}`);
   revalidatePath("/reminders");
+}
+
+/**
+ * Envoie un email de RELANCE DE TEST pour une facture à une étape donnée.
+ *
+ * Sécurité de cette étape : l'email part UNIQUEMENT vers `RESEND_TEST_RECIPIENT`,
+ * jamais vers `client.email`. Aucun vrai client n'est contacté.
+ *
+ * Anti-doublon : volontairement absent ici (contrairement à la simulation). On
+ * veut pouvoir retester une étape même si une simulation/un envoi existe déjà.
+ * Le garde-fou est la confirmation explicite dans l'UI avant chaque envoi.
+ *
+ * Journalise un ReminderEvent SENT (succès) ou FAILED (échec) avec le sujet, le
+ * corps rendus, l'éventuel `providerMessageId` et le message d'erreur.
+ */
+export async function sendTestReminderForInvoice(
+  invoiceId: string,
+  offsetDays: number,
+  _prevState: SendTestState,
+  _formData: FormData
+): Promise<SendTestState> {
+  // Signature imposée par useActionState ; ces deux paramètres ne servent pas ici.
+  void _prevState;
+  void _formData;
+
+  const org = await getCurrentOrganization();
+
+  const testRecipient = getTestRecipient();
+  if (!testRecipient) {
+    return {
+      ok: false,
+      message:
+        "RESEND_TEST_RECIPIENT n'est pas configuré — aucun email de test ne peut être envoyé.",
+    };
+  }
+
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: invoiceId, organizationId: org.id },
+    include: { client: true },
+  });
+  if (!invoice) {
+    return { ok: false, message: "Facture introuvable." };
+  }
+
+  // La facture ne doit être ni payée ni annulée.
+  if (
+    invoice.status === "PAID" ||
+    invoice.status === "CANCELLED" ||
+    invoice.paidAt
+  ) {
+    return {
+      ok: false,
+      message: "Facture payée ou annulée — relance impossible.",
+    };
+  }
+
+  // Étape active correspondante dans la séquence active de l'organisation.
+  const step = await prisma.reminderStep.findFirst({
+    where: {
+      offsetDays,
+      isActive: true,
+      sequence: { organizationId: org.id, isActive: true },
+    },
+    include: { template: true },
+  });
+  if (!step) {
+    return { ok: false, message: "Étape de relance introuvable ou inactive." };
+  }
+  if (!step.template || !step.template.isActive) {
+    return {
+      ok: false,
+      message: "Le modèle de cette étape est introuvable ou archivé.",
+    };
+  }
+
+  const { subject, body } = renderTemplate({
+    subjectTemplate: step.template.subject ?? "",
+    bodyTemplate: step.template.body ?? "",
+    invoice,
+    client: invoice.client,
+    organization: org,
+  });
+
+  // Envoi réel — uniquement vers l'adresse de test.
+  const result = await sendReminderEmail({
+    to: testRecipient,
+    subject,
+    body,
+    invoice,
+    client: invoice.client,
+    organization: org,
+  });
+
+  const now = new Date();
+  await prisma.reminderEvent.create({
+    data: {
+      organizationId: org.id,
+      invoiceId: invoice.id,
+      channel: "EMAIL",
+      status: result.success ? "SENT" : "FAILED",
+      scheduledAt: now,
+      sentAt: result.success ? now : null,
+      offsetDays,
+      messageSubject: subject,
+      messageBody: body,
+      providerMessageId: result.providerMessageId ?? null,
+      errorMessage: result.success ? null : (result.error ?? "Erreur inconnue."),
+    },
+  });
+
+  revalidatePath(`/invoices/${invoice.id}`);
+  revalidatePath("/reminders");
+
+  return result.success
+    ? { ok: true, message: `Email de test envoyé à ${testRecipient}.` }
+    : {
+        ok: false,
+        message: `Échec de l'envoi : ${result.error ?? "erreur inconnue."}`,
+      };
 }
 
 /**
