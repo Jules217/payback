@@ -1,7 +1,10 @@
-import Link from "next/link";
-import type { Metadata } from "next";
+"use client";
 
-import { buttonVariants } from "@/components/ui/button";
+import { useActionState } from "react";
+import Link from "next/link";
+
+import { registerAction } from "./actions";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -13,37 +16,76 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export const metadata: Metadata = { title: "Créer un compte" };
-
 export default function RegisterPage() {
+  const [state, formAction, pending] = useActionState(registerAction, {
+    ok: false,
+  });
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Créer un compte</CardTitle>
-        <CardDescription>
-          Démarrez avec Payback. (Authentification à venir.)
-        </CardDescription>
+        <CardDescription>Démarrez avec Payback.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="organization">Nom de l&apos;organisation</Label>
-          <Input id="organization" placeholder="Mon cabinet" disabled />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <Input id="email" type="email" placeholder="vous@exemple.com" disabled />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="password">Mot de passe</Label>
-          <Input id="password" type="password" placeholder="••••••••" disabled />
-        </div>
-        <Link href="/dashboard" className={buttonVariants({ className: "w-full" })}>
-          Créer mon compte
-        </Link>
-      </CardContent>
+      <form action={formAction}>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="name">Votre nom</Label>
+            <Input
+              id="name"
+              name="name"
+              type="text"
+              placeholder="Sophie Martin"
+              autoComplete="name"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              name="email"
+              type="email"
+              placeholder="vous@exemple.com"
+              autoComplete="email"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">Mot de passe</Label>
+            <Input
+              id="password"
+              name="password"
+              type="password"
+              placeholder="8 caractères minimum"
+              autoComplete="new-password"
+              required
+            />
+          </div>
+          {state.message && (
+            <p
+              className={
+                state.ok ? "text-sm text-success" : "text-sm text-destructive"
+              }
+            >
+              {state.message}
+            </p>
+          )}
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={pending || state.ok}
+          >
+            {pending ? "Création…" : "Créer mon compte"}
+          </Button>
+        </CardContent>
+      </form>
       <CardFooter className="justify-center text-sm text-muted-foreground">
         Déjà un compte ?{" "}
-        <Link href="/login" className="ml-1 font-medium text-primary hover:underline">
+        <Link
+          href="/login"
+          className="ml-1 font-medium text-primary hover:underline"
+        >
           Se connecter
         </Link>
       </CardFooter>

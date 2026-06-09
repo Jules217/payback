@@ -13,11 +13,12 @@ datasource db {
 // ── Utilisateur ───────────────────────────────────────────────
 // Géré manuellement pour l'instant (auth Supabase à venir).
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  supabaseId String?  @unique
+  email      String   @unique
+  name       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   memberships Membership[]
 }
@@ -262,6 +263,10 @@ model ReminderEvent {
   deliveryMode      ReminderDeliveryMode?
   createdAt      DateTime            @default(now())
 
+  // Anti-doublon : index UNIQUE PARTIEL `uniq_reminder_active` posé en SQL
+  // (migration reminder_queue) — unicité (invoiceId, offsetDays, deliveryMode)
+  // limitée aux status SCHEDULED/SENT. Prisma ne sait pas exprimer un index
+  // partiel, d'où l'absence de @@unique ici ; voir prisma/migrations.
   @@index([organizationId])
   @@index([invoiceId])
 }

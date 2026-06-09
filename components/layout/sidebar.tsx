@@ -2,12 +2,31 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Wallet } from "lucide-react";
+import { LogOut, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { dashboardNav } from "@/lib/navigation";
 
-export function Sidebar() {
+interface SidebarProps {
+  queueCount?: number;
+}
+
+/**
+ * Calcule si un item de nav est actif sans écraser un item plus spécifique.
+ * Ex : "Relances" (/reminders) ne s'active plus quand on est sur
+ * /reminders/queue, car "File d'attente" est plus précise.
+ */
+function isNavItemActive(href: string, pathname: string): boolean {
+  if (pathname !== href && !pathname.startsWith(`${href}/`)) return false;
+  return !dashboardNav.some(
+    (other) =>
+      other.href !== href &&
+      other.href.startsWith(`${href}/`) &&
+      (pathname === other.href || pathname.startsWith(`${other.href}/`))
+  );
+}
+
+export function Sidebar({ queueCount = 0 }: SidebarProps) {
   const pathname = usePathname();
 
   return (
@@ -19,9 +38,12 @@ export function Sidebar() {
 
       <nav className="flex-1 space-y-1 p-4">
         {dashboardNav.map((item) => {
-          const isActive =
-            pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const isActive = isNavItemActive(item.href, pathname);
           const Icon = item.icon;
+          const badge =
+            item.href === "/reminders/queue" && queueCount > 0
+              ? queueCount
+              : null;
 
           return (
             <Link
@@ -34,16 +56,34 @@ export function Sidebar() {
                   : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               )}
             >
-              <Icon className="size-4" />
-              {item.title}
+              <Icon className="size-4 shrink-0" />
+              <span className="flex-1">{item.title}</span>
+              {badge ? (
+                <span
+                  className={cn(
+                    "min-w-[18px] rounded-full px-1.5 py-px text-center text-[10px] font-medium tabular-nums leading-4",
+                    isActive
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-warning/20 text-warning"
+                  )}
+                >
+                  {badge}
+                </span>
+              ) : null}
             </Link>
           );
         })}
       </nav>
 
-      <div className="border-t p-4 text-xs text-muted-foreground">
-        <p>Payback — v0.1</p>
-        <p>Relance amiable d&apos;impayés</p>
+      <div className="border-t p-4">
+        <Link
+          href="/logout"
+          className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          <LogOut className="size-4 shrink-0" />
+          Déconnexion
+        </Link>
+        <p className="mt-2 px-3 text-xs text-muted-foreground">Payback — v0.1</p>
       </div>
     </aside>
   );

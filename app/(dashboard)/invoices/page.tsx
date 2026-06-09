@@ -4,24 +4,11 @@ import { Plus, FileText } from "lucide-react";
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
-import {
-  invoiceStatusLabels,
-  invoiceStatusVariants,
-  invoiceStatusBadgeClasses,
-} from "@/lib/labels";
-import { displayStatus, daysOverdue } from "@/lib/invoices/status";
+import { formatCurrency, cn } from "@/lib/utils";
+import { displayStatus } from "@/lib/invoices/status";
 import { buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { InvoicesTableClient } from "@/components/invoices/invoices-table-client";
 import type { InvoiceStatus } from "@/types";
 
 export const metadata: Metadata = { title: "Factures" };
@@ -86,8 +73,18 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
   const dominantCurrency = invoices.find((inv) => inv.currency)?.currency ?? "CAD";
 
   const rows = invoices
-    .map((inv, i) => ({ inv, shown: shownStatuses[i] }))
-    .filter(({ shown }) => matchesFilter(activeFilter, shown));
+    .map((inv, i) => ({
+      id: inv.id,
+      number: inv.number,
+      amountCents: inv.amountCents,
+      currency: inv.currency,
+      issuedAt: inv.issuedAt.toISOString(),
+      dueAt: inv.dueAt.toISOString(),
+      shown: shownStatuses[i],
+      clientId: inv.client.id,
+      clientName: inv.client.name,
+    }))
+    .filter((r) => matchesFilter(activeFilter, r.shown));
 
   return (
     <div className="space-y-6">
@@ -196,80 +193,8 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
             </Link>
           </CardContent>
         </Card>
-      ) : rows.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            Aucune facture pour ce filtre.
-          </CardContent>
-        </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Numéro</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead className="text-right">Montant</TableHead>
-                  <TableHead>Émission</TableHead>
-                  <TableHead>Échéance</TableHead>
-                  <TableHead>Statut</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map(({ inv, shown }) => {
-                  const late = shown === "OVERDUE" ? daysOverdue(inv) : 0;
-                  return (
-                    <TableRow
-                      key={inv.id}
-                      className={late > 0 ? "bg-destructive/5" : undefined}
-                    >
-                      <TableCell className="font-mono font-medium">
-                        {inv.number}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {inv.client.name}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatCurrency(inv.amountCents, inv.currency)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(inv.issuedAt)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(inv.dueAt)}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col items-start gap-1">
-                          <Badge
-                            variant={invoiceStatusVariants[shown]}
-                            className={invoiceStatusBadgeClasses[shown]}
-                          >
-                            {invoiceStatusLabels[shown]}
-                          </Badge>
-                          {late > 0 ? (
-                            <span className="text-xs text-muted-foreground">
-                              {late} jour{late > 1 ? "s" : ""} de retard
-                            </span>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Link
-                          href={`/invoices/${inv.id}`}
-                          className="text-sm font-medium text-primary hover:underline"
-                        >
-                          Voir
-                        </Link>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <InvoicesTableClient rows={rows} />
       )}
     </div>
   );

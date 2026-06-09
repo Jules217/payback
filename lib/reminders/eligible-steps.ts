@@ -19,8 +19,8 @@ export type EligibilityEvent = {
   status: ReminderEventStatus;
 };
 
-/** Statuts qui « consomment » une étape (déjà simulée ou envoyée). */
-const CONSUMING_STATUSES: ReminderEventStatus[] = ["SIMULATED", "SENT"];
+/** Statuts qui « consomment » une étape (déjà en file, simulée ou envoyée). */
+const CONSUMING_STATUSES: ReminderEventStatus[] = ["SCHEDULED", "SIMULATED", "SENT"];
 
 /** Décalages d'étapes déjà déclenchés pour une facture. */
 export function consumedOffsets(events: EligibilityEvent[]): Set<number> {

@@ -24,10 +24,12 @@ import {
   simulateReminderForInvoice,
   sendTestReminderForInvoice,
   sendClientReminderForInvoice,
+  enqueueReminder,
 } from "@/app/(dashboard)/reminders/actions";
 import { SimulateButton } from "@/components/invoices/simulate-button";
 import { SendTestEmailButton } from "@/components/invoices/send-test-email-button";
 import { SendClientEmailButton } from "@/components/invoices/send-client-email-button";
+import { EnqueueButton } from "@/components/invoices/enqueue-button";
 import { getTestRecipient } from "@/lib/email/config";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -154,6 +156,14 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
       .filter((o): o is number => o != null)
   );
 
+  // Décalages EN FILE manuelle (CLIENT/SCHEDULED) — pour le badge "En file".
+  const scheduledOffsets = new Set(
+    invoice.reminderEvents
+      .filter((e) => e.deliveryMode === "CLIENT" && e.status === "SCHEDULED")
+      .map((e) => e.offsetDays)
+      .filter((o): o is number => o != null)
+  );
+
   // Adresse de test (RESEND_TEST_RECIPIENT) — null si l'envoi n'est pas configuré.
   const testRecipient = getTestRecipient();
 
@@ -166,6 +176,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
     .map((step) => ({
       step,
       consumed: done.has(step.offsetDays),
+      isScheduled: scheduledOffsets.has(step.offsetDays),
       rendered: renderTemplate({
         subjectTemplate: step.template?.subject ?? "",
         bodyTemplate: step.template?.body ?? "",
@@ -402,7 +413,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
           ) : (
             /* reminderCase === "available" */
             <ul className="space-y-4">
-              {reachedSteps.map(({ step, rendered, consumed }) => {
+              {reachedSteps.map(({ step, rendered, consumed, isScheduled }) => {
                 const simulate = simulateReminderForInvoice.bind(
                   null,
                   invoice.id,
@@ -414,6 +425,11 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                   step.offsetDays
                 );
                 const sendClient = sendClientReminderForInvoice.bind(
+                  null,
+                  invoice.id,
+                  step.offsetDays
+                );
+                const enqueue = enqueueReminder.bind(
                   null,
                   invoice.id,
                   step.offsetDays
@@ -439,7 +455,13 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                               ? reminderChannelLabels[step.template.channel]
                               : "Email"}
                           </Badge>
-                          {consumed ? (
+                          {/* Badge d'état : "En file" prime sur "Déjà traitée" */}
+                          {isScheduled ? (
+                            <Badge variant="secondary" className="gap-1">
+                              <Clock className="size-3" />
+                              En file
+                            </Badge>
+                          ) : consumed ? (
                             <Badge variant="secondary" className="gap-1">
                               <CheckCheck className="size-3" />
                               Déjà traitée
@@ -459,9 +481,12 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                         ) : null}
                       </div>
                       <div className="flex flex-col items-end gap-2">
+                        {/* Simulate : masqué si consumed (inclut SCHEDULED) */}
                         {consumed ? (
                           <p className="text-xs text-muted-foreground">
-                            Simulation déjà enregistrée.
+                            {isScheduled
+                              ? "En file d'attente."
+                              : "Simulation déjà enregistrée."}
                           </p>
                         ) : (
                           <SimulateButton action={simulate} stepLabel={label} />
@@ -485,6 +510,20 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
                           subject={rendered.subject}
                           alreadySent={clientSentOffsets.has(step.offsetDays)}
                         />
+                        {/* Enqueue : affiché si non consommé ; désactivé si déjà en file */}
+                        {!consumed ? (
+                          <EnqueueButton action={enqueue} stepLabel={label} />
+                        ) : isScheduled ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            className="gap-2 opacity-60"
+                          >
+                            <Clock className="size-4" />
+                            En file
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
 

@@ -6,6 +6,15 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { invoiceFormSchema } from "@/lib/validations/invoice";
+import { eligibleSteps } from "@/lib/reminders/eligible-steps";
+import { renderTemplate } from "@/lib/reminders/render-template";
+
+export type BatchEnqueueResult = {
+  ok: boolean;
+  message: string;
+  ajoutées: number;
+  ignorées: number;
+};
 
 export type InvoiceFormState = {
   ok: boolean;
@@ -205,4 +214,108 @@ export async function cancelInvoice(invoiceId: string): Promise<void> {
   revalidatePath(`/invoices/${invoiceId}`);
   revalidatePath(`/clients/${existing.clientId}`);
   redirect(`/invoices/${invoiceId}`);
+}
+
+/**
+ * Enfile la première étape éligible de chaque facture listée.
+ * Les factures sans étape éligible, sans email client, ou dont
+ * l'index uniq_reminder_active détecte un doublon sont silencieusement ignorées.
+ * router.refresh() côté client prend en charge la revalidation.
+ */
+export async function batchEnqueueReminders(
+  invoiceIds: string[]
+): Promise<BatchEnqueueResult> {
+  if (invoiceIds.length === 0) {
+    return { ok: true, message: "Aucune facture sélectionnée.", ajoutées: 0, ignorées: 0 };
+  }
+
+  const org = await getCurrentOrganization();
+
+  if (!org.emailSendingEnabled) {
+    return {
+      ok: false,
+      message: "L'envoi réel aux clients est désactivé. Activez-le dans Paramètres → Envoi email.",
+      ajoutées: 0,
+      ignorées: 0,
+    };
+  }
+
+  const invoices = await prisma.invoice.findMany({
+    where: { id: { in: invoiceIds }, organizationId: org.id },
+    include: {
+      client: { select: { id: true, name: true, companyName: true, email: true } },
+      reminderEvents: { select: { offsetDays: true, status: true, deliveryMode: true } },
+    },
+  });
+
+  const sequence = await prisma.reminderSequence.findFirst({
+    where: { organizationId: org.id, isActive: true },
+    include: {
+      steps: {
+        where: { isActive: true },
+        include: { template: true },
+        orderBy: { offsetDays: "asc" },
+      },
+    },
+  });
+
+  const activeSteps = sequence?.steps.filter((s) => s.template?.isActive) ?? [];
+
+  let ajoutées = 0;
+  let ignorées = 0;
+
+  for (const invoice of invoices) {
+    const clientEmail = invoice.client.email?.trim();
+    if (!clientEmail) { ignorées++; continue; }
+
+    const eligible = eligibleSteps(invoice, activeSteps, invoice.reminderEvents);
+    const step = eligible[0];
+    if (!step || !step.template) { ignorées++; continue; }
+
+    const { subject, body } = renderTemplate({
+      subjectTemplate: step.template.subject ?? "",
+      bodyTemplate: step.template.body ?? "",
+      invoice,
+      client: invoice.client,
+      organization: org,
+    });
+
+    try {
+      await prisma.reminderEvent.create({
+        data: {
+          organizationId: org.id,
+          invoiceId: invoice.id,
+          channel: "EMAIL",
+          status: "SCHEDULED",
+          deliveryMode: "CLIENT",
+          scheduledAt: new Date(),
+          sentAt: null,
+          offsetDays: step.offsetDays,
+          messageSubject: subject,
+          messageBody: body,
+          recipientEmail: clientEmail,
+        },
+      });
+      ajoutées++;
+    } catch {
+      // Doublon détecté par uniq_reminder_active ou autre contrainte — skip silencieux.
+      ignorées++;
+    }
+  }
+
+  const msgAjoutées = `${ajoutées} relance${ajoutées > 1 ? "s" : ""} ajoutée${ajoutées > 1 ? "s" : ""} à la file.`;
+  const msgIgnorées =
+    ignorées > 0
+      ? ` ${ignorées} ignorée${ignorées > 1 ? "s" : ""} (déjà en file ou aucune étape éligible).`
+      : "";
+
+  return {
+    ok: true,
+    message:
+      ajoutées === 0
+        ? `Aucune relance ajoutée. ${ignorées} ignorée${ignorées > 1 ? "s" : ""} (déjà en file ou aucune étape éligible).`
+        : msgAjoutées + msgIgnorées,
+    ajoutées,
+    ignorées,
+  };
 }

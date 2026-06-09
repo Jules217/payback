@@ -3,6 +3,8 @@
 > Rapport **factuel**, en lecture seule, basé uniquement sur les fichiers réels du dépôt.
 > Date de l'audit : 2026-06-09. Branche : `master`. Aucune valeur de secret n'est exposée (noms de variables uniquement).
 > Révisé après les étapes de refonte design 1–3 puis une passe de polish : palette « Confiance & calme », polices Fraunces/Hanken/IBM Plex Mono, primitives shadcn supplémentaires, timeline de relance, navigation mobile, dashboard enrichi (buckets d'ancienneté neutres si vides), badges de statut en pastilles inline, hero de la landing en Fraunces.
+> Mis à jour après la **queue manuelle de relances** (étapes 1–4) : index partiel `uniq_reminder_active`, baseline Prisma Migrate, `SCHEDULED` dans `CONSUMING_STATUSES`, actions `enqueueReminder`/`dequeueReminder`/`sendQueue`, page `/reminders/queue`, entrée "File d'attente" dans la nav avec badge de compteur.
+> Mis à jour après le **batch enqueue** : `batchEnqueueReminders` dans `invoices/actions.ts`, `InvoicesTableClient` (cases à cocher + barre d'action), `checkbox` shadcn ajouté, `/invoices` délègue son tableau au Client Component.
 
 ---
 
@@ -51,7 +53,7 @@ payback/
 │  │  ├─ dashboard/      KPIs + « à relancer aujourd'hui » + buckets d'ancienneté
 │  │  ├─ clients/        liste + new + [clientId] (+ edit)
 │  │  ├─ invoices/       liste + new + [invoiceId] (+ edit)
-│  │  ├─ reminders/      séquence + [sequenceId] (+ edit)
+│  │  ├─ reminders/      séquence + [sequenceId] (+ edit) + queue/
 │  │  ├─ templates/      liste + new + [templateId] (+ edit)
 │  │  └─ settings/       config envoi email
 │  ├─ api/health/        route de santé
@@ -67,7 +69,7 @@ payback/
 │  ├─ invoices/          status (overdue calculé)
 │  ├─ reminders/         eligible-steps, render-template, preview
 │  └─ validations/       client, invoice, template, sequence, settings (zod)
-├─ prisma/               schema.prisma + seed.ts
+├─ prisma/               schema.prisma + seed.ts + migrations/ (migration_lock.toml, 0_init/, 20260609000001_reminder_queue/)
 ├─ docs/                 PRODUCT.md, EMAIL_DELIVERY.md
 └─ types/                index.ts (types métier indépendants de Prisma)
 ```
@@ -90,6 +92,7 @@ payback/
 | `/reminders` | Séquence active + timeline des étapes + compteur factures éligibles |
 | `/reminders/[sequenceId]` | Détail séquence |
 | `/reminders/[sequenceId]/edit` | Édition des étapes (lignes dynamiques, JSON sérialisé) |
+| `/reminders/queue` | **File d'attente manuelle** — liste les `ReminderEvent{SCHEDULED/CLIENT}` de l'org ; bandeau récap (N relances, montant total) ; bouton « Retirer » par ligne (dequeue) ; bouton primaire « Envoyer la file (N) » (sendQueue, double-clic confirm) ; état vide calme (icône Inbox) |
 | `/templates` | Liste des modèles de message |
 | `/templates/new` | Création modèle (preview live) |
 | `/templates/[templateId]` | Détail modèle + étapes l'utilisant |
@@ -128,7 +131,7 @@ Couleurs thématiques (toutes via variables) : `border, input, ring, background,
 
 Oui — `components.json` présent : style **new-york**, `rsc: true`, baseColor **slate** (héritage du générateur shadcn ; les tokens runtime sont la palette « Confiance & calme » ci-dessus), cssVariables, alias `@/components/ui`, `iconLibrary: lucide`. Plusieurs primitives s'appuient désormais sur **Radix** (`@radix-ui/react-dialog` — base du `sheet` —, `-dropdown-menu`, `-separator`, `-tabs`, `-tooltip`) et le wrapper `chart` sur **recharts**.
 
-Primitives existantes (`components/ui/`) : `badge`, `button` (CVA, variants), `card`, `input`, `label`, `select`, `table`, `textarea`, `tabs`, `dialog`, `dropdown-menu`, `separator`, `skeleton`, `tooltip`, `sheet`, `chart`. (`skeleton` et `chart` sont présents mais **pas encore importés** dans l'app.)
+Primitives existantes (`components/ui/`) : `badge`, `button` (CVA, variants), `card`, `checkbox`, `input`, `label`, `select`, `table`, `textarea`, `tabs`, `dialog`, `dropdown-menu`, `separator`, `skeleton`, `tooltip`, `sheet`, `chart`. (`skeleton` et `chart` sont présents mais **pas encore importés** dans l'app. `checkbox` est utilisé dans `InvoicesTableClient`.)
 
 **Badge** (`components/ui/badge.tsx`, CVA) expose les variants : `default` (Encre), `secondary` (Brume), `destructive` (Brique), `success` (Sauge), `warning` (Ambre), `info` (Encre clair), `outline`. Le mapping statut → variant vit dans `lib/labels.ts` — factures : `DRAFT` secondary · `SENT` outline · `PENDING` warning · `OVERDUE` destructive · `PAID` success · `CANCELLED` secondary + texte rayé ; tons : `GENTLE` success · `PROFESSIONAL` secondary · `FIRM` destructive.
 
@@ -140,16 +143,20 @@ En tableau, le badge de statut se rend en **pastille inline** (largeur du conten
 
 | Chemin | Rôle |
 | --- | --- |
-| `components/layout/sidebar.tsx` | Nav latérale (desktop ≥ md), surlignage actif via `usePathname` |
-| `components/layout/mobile-nav.tsx` | Menu burger mobile (`< md`) : `Sheet` reprenant `dashboardNav` |
-| `components/layout/dashboard-header.tsx` | Titre (`font-display`) + description de page dérivés de `dashboardNav` ; intègre le burger mobile |
+| `components/layout/sidebar.tsx` | Nav latérale (desktop ≥ md), surlignage actif via `isNavItemActive` (préfère la route la plus spécifique — `/reminders/queue` ne surligne plus « Relances »), badge Ambre `queueCount` sur « File d'attente » si > 0 |
+| `components/layout/mobile-nav.tsx` | Menu burger mobile (`< md`) : `Sheet` reprenant `dashboardNav`, même badge `queueCount` |
+| `components/layout/dashboard-header.tsx` | Titre (`font-display`) dérivé du match `href` le plus long dans `dashboardNav` (résout correctement `/reminders/queue` → « File d'attente ») ; prop `queueCount` transmise à `MobileNav` |
 | `components/layout/sandbox-banner.tsx` | Bandeau état (démo amber / envoi réel emerald selon `emailSendingEnabled`) |
 | `components/layout/page-placeholder.tsx` | Bloc « module en préparation » (générique) |
 | `components/clients/client-form.tsx` | Formulaire client |
 | `components/invoices/invoice-form.tsx` | Formulaire facture |
+| `components/invoices/invoices-table-client.tsx` | Tableau des factures (Client Component) — cases Radix Checkbox, `Set<string>` selectedIds, barre d'action conditionnelle (compteur + bouton « Ajouter à la file (N) »), feedback 4 s, `router.refresh()` après envoi |
 | `components/invoices/simulate-button.tsx` | Bouton « Simuler » (confirm inline) |
 | `components/invoices/send-test-email-button.tsx` | Bouton « Envoyer email test » |
 | `components/invoices/send-client-email-button.tsx` | Bouton « Envoyer au client » + récap garde-fous |
+| `components/invoices/enqueue-button.tsx` | Bouton « Ajouter à la file » (`useActionState`, feedback inline ok/ko, se désactive après succès) |
+| `components/reminders/dequeue-button.tsx` | Bouton « Retirer » par ligne de queue (confirm deux étapes, retour nul si `state.ok`) |
+| `components/reminders/send-queue-button.tsx` | Bouton « Envoyer la file (N) » (double-clic confirm, affiche résumé `envoyés/échoués` après envoi) |
 | `components/reminders/sequence-form.tsx` | Édition d'étapes (lignes dynamiques) |
 | `components/reminders/sequence-timeline.tsx` | Timeline d'étapes (signature visuelle) + `hasTemplateIssues` |
 | `components/templates/template-form.tsx` | Formulaire modèle + preview live + chips variables |
@@ -171,6 +178,9 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 - **DB** : PostgreSQL (`provider = "postgresql"`, `datasource.url = env("DATABASE_URL")`). `docker-compose.yml` fournit un Postgres 16-alpine local.
 - **ORM** : **Prisma** (`prisma/schema.prisma`), client en singleton `lib/prisma.ts`.
+- **Migrations** : `prisma/migrations/` présent avec deux entrées :
+  - `0_init/migration.sql` — baseline DDL complet de tout le schéma, appliqué via `migrate resolve --applied 0_init` (la DB existait avant l'adoption de `migrate`).
+  - `20260609000001_reminder_queue/migration.sql` — index partiel `uniq_reminder_active` (voir ci-dessous).
 
 ### Modèles (champs principaux)
 
@@ -185,7 +195,7 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 | `ReminderSequence` | name, isActive, relation `steps` |
 | `ReminderStep` | offsetDays (Int), channel (`EMAIL/SMS`), order, isActive, templateId (nullable, `onDelete: SetNull`) |
 | `MessageTemplate` | name, subject, body, channel, tone (`GENTLE/PROFESSIONAL/FIRM`), language, isActive |
-| `ReminderEvent` | channel, status (`SCHEDULED/SIMULATED/SENT/FAILED/CANCELLED`), scheduledAt, sentAt, offsetDays, messageSubject/messageBody, providerMessageId, errorMessage, **recipientEmail**, **deliveryMode** (`ReminderDeliveryMode SIMULATION/TEST/CLIENT`) |
+| `ReminderEvent` | channel, status (`SCHEDULED/SIMULATED/SENT/FAILED/CANCELLED`), scheduledAt, sentAt, offsetDays, messageSubject/messageBody, providerMessageId, errorMessage, **recipientEmail**, **deliveryMode** (`ReminderDeliveryMode SIMULATION/TEST/CLIENT`) · **Index partiel** `uniq_reminder_active` (`invoiceId, offsetDays, deliveryMode`) `WHERE status IN ('SCHEDULED','SENT')` — bloque l'enqueue doublon et garantit une seule relance active par (facture, offset, mode). |
 
 > ⚠️ Incohérence mineure : `Invoice.currency` par défaut `CAD` mais `Payment.currency` par défaut `EUR`. Le `formatCurrency` de `lib/utils.ts` a un défaut `EUR` alors que le seed génère du `CAD`.
 
@@ -199,10 +209,15 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 - **Séquence J+7 / J+14 / J+30** : pas codée en dur — stockée en base sous forme de `ReminderSequence` + `ReminderStep[]` (offsetDays, channel, order, isActive, templateId). Le seed crée la séquence standard. L'éligibilité est calculée dans `lib/reminders/eligible-steps.ts` : `eligibleSteps(invoice, steps, events)` (J+N applicable si `daysOverdue ≥ N`, facture ni payée ni annulée, offset non « consommé ») et `countEligibleByOffset(…)`.
 - **Modèles & tons** : `MessageTemplate` (subject/body avec variables `{{…}}`) + enum `ReminderTone GENTLE/PROFESSIONAL/FIRM`. Le ton d'une étape est **dérivé du template lié**. Rendu via `lib/reminders/render-template.ts` (`interpolate`, tokens : client_name, organization_name, invoice_number, amount, due_date, payment_link ; token inconnu → chaîne vide). Preview live côté client via `lib/reminders/preview.ts`.
-- **Déclenchement automatique** : **aucun**. Pas de cron, de job planifié ni de queue. Le statut `OVERDUE` lui-même n'est **pas persisté** (calculé à l'affichage, `lib/invoices/status.ts`). Trois actions **manuelles** dans `app/(dashboard)/reminders/actions.ts` :
+- **CONSUMING_STATUSES** (dans `lib/reminders/eligible-steps.ts`) : `["SCHEDULED", "SIMULATED", "SENT"]` — une étape dont l'offset correspond à un événement dans l'un de ces trois statuts est considérée « consommée » et n'est plus éligible. **SCHEDULED a été ajouté** lors de l'implémentation de la queue manuelle ; la page de détail facture calcule un `scheduledOffsets` séparé pour distinguer « En file » (badge Clock, bouton désactivé) de « Déjà traitée » (SIMULATED/SENT).
+- **Déclenchement automatique** : **aucun**. Pas de cron, de job planifié ni de queue automatique. Le statut `OVERDUE` lui-même n'est **pas persisté** (calculé à l'affichage, `lib/invoices/status.ts`). Six actions **manuelles** dans `app/(dashboard)/reminders/actions.ts` :
   - `simulateReminderForInvoice` → `ReminderEvent{SIMULATED}` (aucun envoi, anti-doublon strict) ;
   - `sendTestReminderForInvoice` → envoi réel **uniquement** vers `RESEND_TEST_RECIPIENT` (pas d'anti-doublon, confirmation UI) ;
   - `sendClientReminderForInvoice` → envoi réel vers `client.email`, **bloqué tant que `emailSendingEnabled=false`**, anti-doublon par offset en mode CLIENT, confirmation obligatoire.
+  - `enqueueReminder(invoiceId, offsetDays, prevState, formData)` → crée un `ReminderEvent{SCHEDULED, CLIENT}` avec snapshot `messageSubject/messageBody` rendu via `renderTemplate`. Guards : email non vide, étape + template actifs, pas de doublon SCHEDULED ni SENT pour cet offset/CLIENT. Revalide `/invoices/{id}`, `/reminders`, `/reminders/queue`, `/dashboard`.
+  - `dequeueReminder(eventId, prevState, formData)` → vérifie appartenance à l'org et `status === "SCHEDULED"`, puis supprime l'événement. Mêmes `revalidatePath`.
+  - `sendQueue(prevState, formData)` → charge tous les `SCHEDULED/CLIENT` de l'org (ordre `scheduledAt`), envoie séquentiellement via `sendReminderEmail` en réutilisant le snapshot (`messageSubject`/`messageBody`), met à jour chaque événement en `SENT` (succès) ou `FAILED` (erreur), continue en cas d'échec individuel. Retourne `{ ok, envoyés, échoués, détails[] }` avec `message` pluralisé. Bloqué si `emailSendingEnabled=false`. Revalide `/reminders/queue` et `/dashboard`.
+- **Batch enqueue** (`batchEnqueueReminders(invoiceIds[])` dans `app/(dashboard)/invoices/actions.ts`) : détermine automatiquement la **première étape éligible** (offset le plus petit, via `eligibleSteps()`) pour chaque facture de la liste ; crée un `ReminderEvent{SCHEDULED, CLIENT}` avec snapshot par facture éligible. Factures sans étape éligible, sans email client, ou en doublon (index partiel) → ignorées silencieusement. Retourne `{ ok, ajoutées, ignorées, message }`. Bloqué si `emailSendingEnabled=false`. Pas de `revalidatePath` — le Client Component appelle `router.refresh()`. La page `/invoices` reste **Server Component** ; elle sérialise les dates en `.toISOString()` et délègue le rendu du tableau à `InvoicesTableClient`.
 
 ---
 

@@ -28,6 +28,164 @@ export type SendClientState = {
   message?: string;
 };
 
+export type EnqueueState = {
+  ok: boolean;
+  message?: string;
+};
+
+export type DequeueState = {
+  ok: boolean;
+  message?: string;
+};
+
+export type SendQueueDetail = {
+  invoiceNumber: string;
+  clientName: string;
+  offsetDays: number | null;
+  status: "SENT" | "FAILED";
+  error?: string;
+};
+
+export type SendQueueResult = {
+  ok: boolean;
+  message?: string;
+  envoyés: number;
+  échoués: number;
+  détails: SendQueueDetail[];
+};
+
+/**
+ * Envoie tous les ReminderEvent SCHEDULED/CLIENT de l'organisation.
+ *
+ * Utilise exclusivement le snapshot (messageSubject, messageBody, recipientEmail)
+ * figé à l'empilement — aucun re-render, aucun re-fetch du template.
+ * Les envois sont séquentiels pour respecter les limites de débit de Resend.
+ * La boucle continue sur les échecs individuels d'envoi.
+ */
+export async function sendQueue(
+  _prevState: SendQueueResult | null,
+  _formData: FormData
+): Promise<SendQueueResult> {
+  void _prevState;
+  void _formData;
+
+  const empty: SendQueueResult = { ok: true, envoyés: 0, échoués: 0, détails: [] };
+
+  const org = await getCurrentOrganization();
+
+  if (!org.emailSendingEnabled) {
+    return {
+      ok: false,
+      message:
+        "L'envoi réel aux clients est désactivé. Activez-le dans Paramètres → Envoi email.",
+      envoyés: 0,
+      échoués: 0,
+      détails: [],
+    };
+  }
+
+  const events = await prisma.reminderEvent.findMany({
+    where: { organizationId: org.id, status: "SCHEDULED", deliveryMode: "CLIENT" },
+    orderBy: { scheduledAt: "asc" },
+    include: {
+      invoice: {
+        select: {
+          number: true,
+          amountCents: true,
+          currency: true,
+          dueAt: true,
+          paymentUrl: true,
+          client: { select: { name: true, companyName: true } },
+        },
+      },
+    },
+  });
+
+  if (events.length === 0) {
+    return { ...empty, message: "La file d'attente est vide." };
+  }
+
+  let envoyés = 0;
+  let échoués = 0;
+  const détails: SendQueueDetail[] = [];
+  const now = new Date();
+
+  for (const event of events) {
+    // Défensif : un event sans snapshot ne devrait pas exister (enqueueReminder
+    // garantit le snapshot), mais on le marque FAILED plutôt que de planter.
+    if (!event.recipientEmail || !event.messageSubject || !event.messageBody) {
+      await prisma.reminderEvent.update({
+        where: { id: event.id },
+        data: { status: "FAILED", errorMessage: "Snapshot manquant (sujet, corps ou destinataire vide)." },
+      });
+      échoués++;
+      détails.push({
+        invoiceNumber: event.invoice.number,
+        clientName: event.invoice.client.name,
+        offsetDays: event.offsetDays,
+        status: "FAILED",
+        error: "Snapshot manquant.",
+      });
+      continue;
+    }
+
+    // Envoi via le snapshot — subject et body proviennent du ReminderEvent,
+    // pas d'un re-render du template. invoice/client satisfont le type de
+    // sendReminderEmail (utilisés uniquement pour la signature, pas recalculés).
+    const result = await sendReminderEmail({
+      to: event.recipientEmail,
+      subject: event.messageSubject,
+      body: event.messageBody,
+      invoice: event.invoice,
+      client: event.invoice.client,
+      organization: org,
+      fromName: org.emailFromName,
+      replyTo: org.emailReplyTo,
+    });
+
+    if (result.success) {
+      await prisma.reminderEvent.update({
+        where: { id: event.id },
+        data: {
+          status: "SENT",
+          sentAt: now,
+          providerMessageId: result.providerMessageId ?? null,
+        },
+      });
+      envoyés++;
+      détails.push({
+        invoiceNumber: event.invoice.number,
+        clientName: event.invoice.client.name,
+        offsetDays: event.offsetDays,
+        status: "SENT",
+      });
+    } else {
+      await prisma.reminderEvent.update({
+        where: { id: event.id },
+        data: { status: "FAILED", errorMessage: result.error ?? "Erreur inconnue." },
+      });
+      échoués++;
+      détails.push({
+        invoiceNumber: event.invoice.number,
+        clientName: event.invoice.client.name,
+        offsetDays: event.offsetDays,
+        status: "FAILED",
+        error: result.error,
+      });
+    }
+  }
+
+  revalidatePath("/reminders/queue");
+  revalidatePath("/dashboard");
+
+  const message =
+    échoués === 0
+      ? `${envoyés} email${envoyés > 1 ? "s" : ""} envoyé${envoyés > 1 ? "s" : ""}.`
+      : `${envoyés} envoyé${envoyés > 1 ? "s" : ""}, ${échoués} échoué${échoués > 1 ? "s" : ""}.`;
+
+  return { ok: true, message, envoyés, échoués, détails };
+}
+
 /**
  * Simule une relance pour une facture à une étape donnée (J+N).
  *
@@ -367,6 +525,181 @@ export async function sendClientReminderForInvoice(
         ok: false,
         message: `Échec de l'envoi : ${result.error ?? "erreur inconnue."}`,
       };
+}
+
+/**
+ * Ajoute une relance à la file d'attente manuelle.
+ *
+ * Garde-fous (même exigences que sendClientReminderForInvoice, sans envoi) :
+ * - org.emailSendingEnabled doit être true ;
+ * - la facture appartient à l'org, n'est ni payée ni annulée ;
+ * - le client possède une adresse email ;
+ * - l'étape est active et son modèle est actif.
+ *
+ * Anti-doublon : si un event SCHEDULED ou SENT avec deliveryMode CLIENT existe
+ * déjà pour (invoiceId, offsetDays), on ne crée rien et on renvoie un état
+ * descriptif sans lever d'exception.
+ *
+ * Le snapshot (subject + body) est figé au moment de l'empilement.
+ */
+export async function enqueueReminder(
+  invoiceId: string,
+  offsetDays: number,
+  _prevState: EnqueueState,
+  _formData: FormData
+): Promise<EnqueueState> {
+  void _prevState;
+  void _formData;
+
+  const org = await getCurrentOrganization();
+
+  if (!org.emailSendingEnabled) {
+    return {
+      ok: false,
+      message:
+        "L'envoi réel aux clients est désactivé. Activez-le dans Paramètres → Envoi email.",
+    };
+  }
+
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: invoiceId, organizationId: org.id },
+    include: {
+      client: true,
+      reminderEvents: {
+        select: { offsetDays: true, status: true, deliveryMode: true },
+      },
+    },
+  });
+  if (!invoice) {
+    return { ok: false, message: "Facture introuvable." };
+  }
+
+  if (
+    invoice.status === "PAID" ||
+    invoice.status === "CANCELLED" ||
+    invoice.paidAt
+  ) {
+    return { ok: false, message: "Facture payée ou annulée — relance impossible." };
+  }
+
+  const clientEmail = invoice.client.email?.trim();
+  if (!clientEmail) {
+    return {
+      ok: false,
+      message: "Le client n'a pas d'adresse email — mise en file impossible.",
+    };
+  }
+
+  // Anti-doublon : SCHEDULED (déjà en file) ou SENT (déjà envoyé au client).
+  const existing = invoice.reminderEvents.find(
+    (e) =>
+      e.deliveryMode === "CLIENT" &&
+      (e.status === "SCHEDULED" || e.status === "SENT") &&
+      e.offsetDays === offsetDays
+  );
+  if (existing) {
+    return {
+      ok: false,
+      message:
+        existing.status === "SENT"
+          ? `Un email a déjà été envoyé au client pour l'étape ${stepOffsetLabel(offsetDays)}.`
+          : `Cette étape (${stepOffsetLabel(offsetDays)}) est déjà en file d'attente.`,
+    };
+  }
+
+  const step = await prisma.reminderStep.findFirst({
+    where: {
+      offsetDays,
+      isActive: true,
+      sequence: { organizationId: org.id, isActive: true },
+    },
+    include: { template: true },
+  });
+  if (!step) {
+    return { ok: false, message: "Étape de relance introuvable ou inactive." };
+  }
+  if (!step.template || !step.template.isActive) {
+    return {
+      ok: false,
+      message: "Le modèle de cette étape est introuvable ou archivé.",
+    };
+  }
+
+  // Snapshot figé à l'empilement — le template peut évoluer, pas le message préparé.
+  const { subject, body } = renderTemplate({
+    subjectTemplate: step.template.subject ?? "",
+    bodyTemplate: step.template.body ?? "",
+    invoice,
+    client: invoice.client,
+    organization: org,
+  });
+
+  const now = new Date();
+  await prisma.reminderEvent.create({
+    data: {
+      organizationId: org.id,
+      invoiceId: invoice.id,
+      channel: "EMAIL",
+      status: "SCHEDULED",
+      deliveryMode: "CLIENT",
+      scheduledAt: now,
+      sentAt: null,
+      offsetDays,
+      messageSubject: subject,
+      messageBody: body,
+      recipientEmail: clientEmail,
+    },
+  });
+
+  revalidatePath(`/invoices/${invoice.id}`);
+  revalidatePath("/reminders");
+  revalidatePath("/reminders/queue");
+  revalidatePath("/dashboard");
+
+  return {
+    ok: true,
+    message: `Relance ${stepOffsetLabel(offsetDays)} mise en file pour ${invoice.client.name}.`,
+  };
+}
+
+/**
+ * Retire une relance de la file d'attente manuelle.
+ *
+ * Seul un event au statut SCHEDULED peut être supprimé. Un event SENT, FAILED
+ * ou SIMULATED représente un envoi passé et ne doit jamais être effacé ici.
+ */
+export async function dequeueReminder(
+  eventId: string,
+  _prevState: DequeueState,
+  _formData: FormData
+): Promise<DequeueState> {
+  void _prevState;
+  void _formData;
+
+  const org = await getCurrentOrganization();
+
+  const event = await prisma.reminderEvent.findFirst({
+    where: { id: eventId, organizationId: org.id },
+  });
+  if (!event) {
+    return { ok: false, message: "Relance introuvable." };
+  }
+
+  if (event.status !== "SCHEDULED") {
+    return {
+      ok: false,
+      message: "Seules les relances en attente peuvent être retirées de la file.",
+    };
+  }
+
+  await prisma.reminderEvent.delete({ where: { id: eventId } });
+
+  revalidatePath(`/invoices/${event.invoiceId}`);
+  revalidatePath("/reminders");
+  revalidatePath("/reminders/queue");
+  revalidatePath("/dashboard");
+
+  return { ok: true, message: "Relance retirée de la file d'attente." };
 }
 
 /**

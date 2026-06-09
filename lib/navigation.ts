@@ -3,6 +3,7 @@ import {
   Users,
   FileText,
   Bell,
+  ListChecks,
   Mail,
   Settings,
   type LucideIcon,
@@ -40,6 +41,12 @@ export const dashboardNav: NavItem[] = [
     href: "/reminders",
     icon: Bell,
     description: "Scénarios et historique de relance",
+  },
+  {
+    title: "File d'attente",
+    href: "/reminders/queue",
+    icon: ListChecks,
+    description: "Relances prêtes à envoyer",
   },
   {
     title: "Modèles",
