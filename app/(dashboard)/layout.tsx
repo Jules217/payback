@@ -4,8 +4,6 @@ import { SandboxBanner } from "@/components/layout/sandbox-banner";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { prisma } from "@/lib/prisma";
 
-export const dynamic = "force-dynamic";
-
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {

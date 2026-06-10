@@ -4,13 +4,43 @@ import { revalidatePath } from "next/cache";
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
-import { emailSettingsSchema } from "@/lib/validations/settings";
+import { emailSettingsSchema, orgNameSchema } from "@/lib/validations/settings";
 
 export type SettingsFormState = {
   ok: boolean;
   message?: string;
   errors?: Record<string, string[]>;
 };
+
+export async function updateOrgName(
+  _prevState: SettingsFormState,
+  formData: FormData
+): Promise<SettingsFormState> {
+  void _prevState;
+
+  const parsed = orgNameSchema.safeParse({
+    name: String(formData.get("name") ?? ""),
+  });
+
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: "Vérifiez les champs en erreur.",
+      errors: parsed.error.flatten().fieldErrors,
+    };
+  }
+
+  const org = await getCurrentOrganization();
+  await prisma.organization.update({
+    where: { id: org.id },
+    data: { name: parsed.data.name },
+  });
+
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+
+  return { ok: true, message: "Nom de l'organisation mis à jour." };
+}
 
 /**
  * Met à jour la configuration d'envoi email de l'organisation courante.

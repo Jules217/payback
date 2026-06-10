@@ -3,6 +3,7 @@ import { Settings } from "lucide-react";
 
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { EmailSettingsForm } from "@/components/settings/email-settings-form";
+import { OrgNameForm } from "@/components/settings/org-name-form";
 import {
   Card,
   CardContent,
@@ -12,8 +13,6 @@ import {
 } from "@/components/ui/card";
 
 export const metadata: Metadata = { title: "Paramètres" };
-
-export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const org = await getCurrentOrganization();
@@ -31,6 +30,18 @@ export default async function SettingsPage() {
           </p>
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Organisation</CardTitle>
+          <CardDescription>
+            Informations générales de votre organisation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <OrgNameForm defaultName={org.name} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

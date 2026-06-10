@@ -5,6 +5,7 @@
 > Révisé après les étapes de refonte design 1–3 puis une passe de polish : palette « Confiance & calme », polices Fraunces/Hanken/IBM Plex Mono, primitives shadcn supplémentaires, timeline de relance, navigation mobile, dashboard enrichi (buckets d'ancienneté neutres si vides), badges de statut en pastilles inline, hero de la landing en Fraunces.
 > Mis à jour après la **queue manuelle de relances** (étapes 1–4) : index partiel `uniq_reminder_active`, baseline Prisma Migrate, `SCHEDULED` dans `CONSUMING_STATUSES`, actions `enqueueReminder`/`dequeueReminder`/`sendQueue`, page `/reminders/queue`, entrée "File d'attente" dans la nav avec badge de compteur.
 > Mis à jour après le **batch enqueue** : `batchEnqueueReminders` dans `invoices/actions.ts`, `InvoicesTableClient` (cases à cocher + barre d'action), `checkbox` shadcn ajouté, `/invoices` délègue son tableau au Client Component.
+> Mis à jour après l'**intégration Auth Supabase** (phases 1–4) : `@supabase/supabase-js` + `@supabase/ssr`, middleware racine, `getCurrentOrganization` réécrit sur session réelle, login/register/logout fonctionnels, `User.supabaseId`, migration `20260609000002`, `lib/constants.ts` supprimé, `force-dynamic` retiré du layout.
 
 ---
 
@@ -33,13 +34,15 @@
 | Graphes | `recharts` | ^2.15.4 |
 | ORM / DB | `@prisma/client` | ^6.2.1 (généré v6.19.3) |
 | ORM / DB | `prisma` (dev) | ^6.2.1 |
+| Auth | `@supabase/supabase-js` | ^2.x |
+| Auth | `@supabase/ssr` | ^0.12.0 |
 | Email | `resend` | ^6.12.4 |
 | Validation | `zod` | ^3.24.1 |
 | Serveur | `server-only` | ^0.0.1 |
 | Tooling (dev) | `tsx` | ^4.19.2 |
 | Lint | `eslint` ^8.57.1 + `eslint-config-next` 15.1.6 | — |
 
-**Auth : aucune dépendance.** **SMS : aucune dépendance.** **Paiement : aucune dépendance.** **Data fetching client : aucune dépendance** (pas de React Query / SWR). Tout le data fetching passe par Prisma dans des Server Components.
+**Auth** : `@supabase/supabase-js` (client JS + admin API) et `@supabase/ssr` (`createServerClient` / `createBrowserClient`, gestion des cookies de session). **SMS : aucune dépendance.** **Paiement : aucune dépendance.** **Data fetching client : aucune dépendance** (pas de React Query / SWR). Tout le data fetching passe par Prisma dans des Server Components.
 
 ---
 
@@ -47,15 +50,16 @@
 
 ```
 payback/
+├─ middleware.ts          protection des routes dashboard (updateSession + redirects)
 ├─ app/
-│  ├─ (auth)/            login, register (layout dédié centré)
-│  ├─ (dashboard)/       layout (sidebar + header [+ burger mobile] + bandeau), force-dynamic
+│  ├─ (auth)/            login, register (fonctionnels), logout/ (Route Handler)
+│  ├─ (dashboard)/       layout (sidebar + header [+ burger mobile] + bandeau)
 │  │  ├─ dashboard/      KPIs + « à relancer aujourd'hui » + buckets d'ancienneté
 │  │  ├─ clients/        liste + new + [clientId] (+ edit)
 │  │  ├─ invoices/       liste + new + [invoiceId] (+ edit)
 │  │  ├─ reminders/      séquence + [sequenceId] (+ edit) + queue/
 │  │  ├─ templates/      liste + new + [templateId] (+ edit)
-│  │  └─ settings/       config envoi email
+│  │  └─ settings/       nom de l'organisation + config envoi email
 │  ├─ api/health/        route de santé
 │  ├─ layout.tsx         root (polices Hanken Grotesk + Fraunces + IBM Plex Mono, metadata)
 │  └─ page.tsx           landing
@@ -64,12 +68,15 @@ payback/
 │  │                     tabs, dialog, dropdown-menu, separator, skeleton, tooltip, sheet, chart)
 │  ├─ layout/            sidebar, mobile-nav, dashboard-header, sandbox-banner, page-placeholder
 │  ├─ clients/ invoices/ reminders/ templates/ settings/   formulaires & boutons métier
-├─ lib/                  prisma, current-organization, labels, navigation, constants, utils
+├─ lib/
+│  ├─ supabase/          client.ts (browser), server.ts (async SSR), middleware.ts (updateSession)
 │  ├─ email/             config, resend (lazy), send-reminder-email
 │  ├─ invoices/          status (overdue calculé)
 │  ├─ reminders/         eligible-steps, render-template, preview
-│  └─ validations/       client, invoice, template, sequence, settings (zod)
-├─ prisma/               schema.prisma + seed.ts + migrations/ (migration_lock.toml, 0_init/, 20260609000001_reminder_queue/)
+│  ├─ validations/       client, invoice, template, sequence, settings (zod)
+│  └─ (prisma, current-organization, labels, navigation, utils)
+├─ prisma/               schema.prisma + seed.ts + migrations/ (migration_lock.toml, 0_init/,
+│                        20260609000001_reminder_queue/, 20260609000002_add_supabase_id/)
 ├─ docs/                 PRODUCT.md, EMAIL_DELIVERY.md
 └─ types/                index.ts (types métier indépendants de Prisma)
 ```
@@ -79,7 +86,9 @@ payback/
 | Route | Rôle (une ligne) |
 | --- | --- |
 | `/` | Landing marketing (hero + 3 features + footer) |
-| `/login`, `/register` | Écrans auth **factices** (champs `disabled`, lien direct vers `/dashboard`) |
+| `/login` | Connexion **fonctionnelle** — formulaire `useActionState` + `loginAction` (Supabase `signInWithPassword`, redirect `/dashboard`) |
+| `/register` | Inscription **fonctionnelle** — formulaire `useActionState` + `registerAction` (Supabase `signUp` avec `full_name`, gère email de confirmation) |
+| `/logout` | Route Handler GET — `signOut()` Supabase + redirect `/login` |
 | `/dashboard` | 4 KPIs (à recouvrer, en retard, payé, clients actifs) + liste « à relancer aujourd'hui » (étapes éligibles) + 3 buckets d'ancienneté (0–30 / 31–60 / 61+ j, teintés seulement si non vides) |
 | `/clients` | Liste des clients de l'organisation |
 | `/clients/new` | Formulaire création client |
@@ -97,7 +106,7 @@ payback/
 | `/templates/new` | Création modèle (preview live) |
 | `/templates/[templateId]` | Détail modèle + étapes l'utilisant |
 | `/templates/[templateId]/edit` | Édition modèle |
-| `/settings` | Configuration **Envoi email** (opt-in, nom d'expéditeur, reply-to) |
+| `/settings` | **Nom de l'organisation** (card `OrgNameForm` + action `updateOrgName`) + **Envoi email** (opt-in, nom d'expéditeur, reply-to) |
 | `/api/health` | Endpoint de santé |
 
 ---
@@ -170,7 +179,7 @@ En tableau, le badge de statut se rend en **pastille inline** (largeur du conten
 
 ### Construction d'une nouvelle page (aujourd'hui)
 
-Une page du dashboard est un **Server Component** (`async`) rendant `export const dynamic = "force-dynamic"`, qui résout l'organisation via `getCurrentOrganization()` puis interroge Prisma directement. Le `(dashboard)/layout.tsx` fournit sidebar (desktop) + header (avec burger mobile `Sheet`) + `SandboxBanner`. La page compose des primitives `components/ui/*` (Card, Table, Badge, Button…) ; les interactions (formulaires, confirmations) passent par des **client components** dédiés branchés sur des **server actions** (`useActionState` ou `form action={…}`). La validation se fait côté serveur avec un schéma **zod** de `lib/validations/`.
+Une page du dashboard est un **Server Component** (`async`) exportant `export const dynamic = "force-dynamic"` (les pages individuelles conservent ce pragma ; le `(dashboard)/layout.tsx` ne l'a plus — auto-dynamic via `cookies()`). Elle appelle `getCurrentOrganization()` qui lit la session Supabase et renvoie l'org du user connecté (ou redirige vers `/login`). Le `(dashboard)/layout.tsx` fournit sidebar (desktop) + header (avec burger mobile `Sheet`) + `SandboxBanner`. La page compose des primitives `components/ui/*` (Card, Table, Badge, Button…) ; les interactions (formulaires, confirmations) passent par des **client components** dédiés branchés sur des **server actions** (`useActionState` ou `form action={…}`). La validation se fait côté serveur avec un schéma **zod** de `lib/validations/`.
 
 ---
 
@@ -181,12 +190,13 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 - **Migrations** : `prisma/migrations/` présent avec deux entrées :
   - `0_init/migration.sql` — baseline DDL complet de tout le schéma, appliqué via `migrate resolve --applied 0_init` (la DB existait avant l'adoption de `migrate`).
   - `20260609000001_reminder_queue/migration.sql` — index partiel `uniq_reminder_active` (voir ci-dessous).
+  - `20260609000002_add_supabase_id/migration.sql` — ajoute `"supabaseId" TEXT` + index unique sur `User`.
 
 ### Modèles (champs principaux)
 
 | Modèle | Champs clés |
 | --- | --- |
-| `User` | id, email (unique), name, timestamps · relation `memberships` |
+| `User` | id, **supabaseId** (String?, unique — lien vers l'identité Supabase Auth), email (unique), name, timestamps · relation `memberships` |
 | `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo** · relations clients/invoices/payments/sequences/templates/events |
 | `Membership` | userId, organizationId, role (`MemberRole OWNER/ADMIN/MEMBER`), unique (user, org) |
 | `Client` | name, companyName, email, phone, preferredChannel (`EMAIL/SMS/BOTH`), language (`FR/EN`), status (`ACTIVE/ARCHIVED`), notes |
@@ -201,7 +211,7 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 ### Données « mode démo » / seed
 
-`prisma/seed.ts` (script `tsx`, idempotent par ids fixes `*_demo_*`) : 1 user démo, 1 org `Payback Demo Agency` (id `org_demo_payback`), 1 membership OWNER, 5 clients, 5 factures (couvrant payée/en attente/retard 7 & 30 j/annulée), 3 templates (doux/pro/ferme), 1 séquence `Relance amiable standard` à 3 étapes (J+7/J+14/J+30). Les upsert templates/séquence/étapes utilisent `update: {}` (non destructif) ; `emailSendingEnabled: false` est posé en **create** uniquement. L'org de démo est aussi **upsertée à la volée** par `lib/current-organization.ts` (l'app fonctionne sans avoir lancé le seed).
+`prisma/seed.ts` (script `tsx`, idempotent par ids fixes `*_demo_*`) : 1 user démo (`supabaseId: null` explicite, ne conflicte pas avec l'unicité), 1 org `Payback Demo Agency` (id `org_demo_payback`), 1 membership OWNER, 5 clients, 5 factures (couvrant payée/en attente/retard 7 & 30 j/annulée), 3 templates (doux/pro/ferme), 1 séquence `Relance amiable standard` à 3 étapes (J+7/J+14/J+30). Les upsert templates/séquence/étapes utilisent `update: {}` (non destructif) ; `emailSendingEnabled: false` est posé en **create** uniquement. **`lib/current-organization.ts` ne upserte plus l'org démo** — il résout désormais l'org via la session Supabase (premier login → création à la volée d'une org « Mon organisation »). Pour avoir les données démo, il faut lancer le seed et se connecter avec le user démo (qui n'a pas de `supabaseId`, donc non résolvable via l'auth réelle).
 
 ---
 
@@ -228,7 +238,7 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 | **Email — Resend** | **Branché** (SDK `resend`, client lazy `lib/email/resend.ts`). Envoi réel possible vers l'adresse de test ou, si opt-in, vers `client.email`. Fonctionne sans clé au build (init paresseuse, `EmailConfigError` propre). | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TEST_RECIPIENT` (présents et **vides** dans `.env.example`) |
 | **SMS — Twilio** | **Non branché / non installé.** `ReminderChannel.SMS` existe dans le modèle mais aucun envoi SMS. | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (commentés dans `.env.example`) |
 | **Paiement — Stripe** | **Non branché / non installé.** `Invoice.paymentUrl` est un simple champ texte (liens factices dans le seed, ex. `https://pay.payback-demo.app/…`). | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (commentés) |
-| **Auth — Supabase** | **Non branché / non installé.** | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (commentés) |
+| **Auth — Supabase** | **Branché** (`@supabase/supabase-js` + `@supabase/ssr`). Login / register / logout fonctionnels. Routes dashboard protégées par `middleware.ts` racine. Session gérée via cookie `sb-{ref}-auth-token` rafraîchi à chaque requête par `updateSession`. Provisionnement automatique User+Org+Membership au 1er login. | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (présents dans `.env`) |
 | **Base de données** | Requise. | `DATABASE_URL` |
 | **App** | — | `NEXT_PUBLIC_APP_URL` |
 
@@ -238,8 +248,30 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 ## 7. Auth & multi-tenant
 
-- **Authentification** : **inexistante**. `/login` et `/register` sont des maquettes (champs `disabled`) qui pointent directement vers `/dashboard`. Aucune session, aucun middleware de protection des routes `(dashboard)`.
-- **Organisation / multi-tenant** : modélisé proprement en base (`Organization` ↔ `Membership` ↔ `User`, et toutes les entités portent `organizationId` avec index et `onDelete: Cascade`). **Mais** l'isolation effective repose sur `lib/current-organization.ts`, helper **TEMPORAIRE** qui **renvoie toujours l'organisation de démo** (`DEMO_ORG_ID`, upsert) — il n'y a donc **qu'un seul tenant** réellement servi (« Payback Demo Agency »). Les requêtes scoprent bien par `org.id`, mais cet `org.id` est constant. `lib/constants.ts` est annoté « À SUPPRIMER lors de l'intégration de l'auth réelle ».
+### Authentification (Supabase — opérationnelle)
+
+| Fichier | Rôle |
+| --- | --- |
+| `lib/supabase/client.ts` | `createBrowserClient` (`@supabase/ssr`) — usage côté client uniquement |
+| `lib/supabase/server.ts` | `createServerClient` async (`await cookies()`) — Server Components, Actions, Route Handlers |
+| `lib/supabase/middleware.ts` | `updateSession(request)` — rafraîchit le cookie de session et retourne `{ response, user }` |
+| `middleware.ts` (racine) | Lit la session via `updateSession`, redirige les routes protégées vers `/login` si `!user`, redirige `/login`/`/register` vers `/dashboard` si `user` |
+| `app/(auth)/login/actions.ts` | `loginAction` — `signInWithPassword` → cookie posé par `@supabase/ssr` → `redirect('/dashboard')` |
+| `app/(auth)/register/actions.ts` | `registerAction` — `signUp` (avec `full_name` dans `user_metadata`) → si `session` : `redirect('/dashboard')` ; sinon message de confirmation email |
+| `app/(auth)/logout/route.ts` | Route Handler GET — `signOut()` + `redirect('/login')` |
+| `lib/current-organization.ts` | Point d'entrée unique pour toutes les pages : `supabase.auth.getUser()` → lookup `User` par `supabaseId` → si absent : création à la volée (transaction `User + Organization + Membership OWNER`) → retourne `membership.organization` |
+
+**Routes protégées** : `/dashboard`, `/clients`, `/invoices`, `/reminders`, `/templates`, `/settings` — toute requête sans session valide est redirigée vers `/login` par le middleware.
+
+**Cookie de session** : `sb-{ref}-auth-token` (JSON sérialisé, 1 chunk car < 3180 chars), `httpOnly: false`, `sameSite: Lax`. Rafraîchi à chaque requête par le middleware via `setAll`.
+
+### Multi-tenant
+
+Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `organizationId` sur toutes les entités (index, `onDelete: Cascade`). **Isolation réelle** : `getCurrentOrganization()` renvoie l'org du user connecté ; chaque requête Prisma est scopée sur cet `org.id`. Plusieurs tenants sont supportés de facto — un user peut posséder plusieurs orgs (membership lookup `orderBy: createdAt asc` pour prendre la plus ancienne).
+
+**Provisionnement premier login** : si `User.supabaseId` absent en base, une transaction crée `Organization { name: "Mon organisation" }` + `User { supabaseId, email, name }` + `Membership { OWNER }` et retourne la nouvelle org. L'utilisateur est immédiatement fonctionnel.
+
+**User démo** (seed) : `supabaseId: null` → non résolvable via l'auth Supabase ; accessible uniquement via les scripts de dev. `lib/constants.ts` (qui portait les `DEMO_*`) a été supprimé.
 
 ---
 
@@ -255,32 +287,35 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 ### Zones « mock / démo / temporaire » à remplacer
 
-- `lib/current-organization.ts` — helper **TEMPORAIRE** (org de démo figée) → à remplacer par la session auth réelle.
-- `lib/constants.ts` — `DEMO_*` « À SUPPRIMER lors de l'intégration de l'auth réelle ».
-- `app/(auth)/login` & `register` — formulaires **factices** (champs `disabled`, pas de soumission).
 - `components/layout/page-placeholder.tsx` — bloc « module en préparation » **désormais orphelin** (aucun import dans `app/` ni `components/`) → supprimable.
 - `Invoice.paymentUrl` — liens de paiement **factices** dans le seed (pas de Stripe).
-- Aucun `TODO`/`FIXME` littéral dans le code (les marqueurs sont des commentaires « temporaire / à venir / À SUPPRIMER »).
+- Aucun `TODO`/`FIXME` littéral dans le code.
+
+> ~~`lib/current-organization.ts`~~ — **résolu** : reécrit sur session Supabase réelle (plus temporaire).
+> ~~`lib/constants.ts`~~ — **résolu** : fichier supprimé.
+> ~~`app/(auth)/login` & `register`~~ — **résolu** : formulaires fonctionnels avec Supabase Auth.
 
 ---
 
 ## 9. Mon évaluation (en tant qu'agent)
 
-### 5 faiblesses UX/UI observées dans le code
+### 4 faiblesses UX/UI observées dans le code
 
 1. **Config `darkMode` résiduelle** : `darkMode: ["class"]` subsiste dans `tailwind.config.ts` (et quelques utilitaires `dark:` traînent dans des composants) alors que les tokens `.dark` ont été retirés et qu'aucun toggle n'existe → config morte à nettoyer.
-2. **Auth trompeuse** : `/login`/`/register` ont des champs `disabled` et un bouton qui ouvre le dashboard sans contrôle — confus et non sécurisé (aucune route protégée).
-3. **Devise incohérente** : seed en `CAD`, `formatCurrency`/`Payment` par défaut `EUR`, dashboard (KPIs + buckets d'ancienneté) prend « la devise de la première facture » → risque d'agrégats mélangeant des devises sans conversion.
-4. **États vides ad hoc** : certaines pages s'appuient encore sur des messages bruts (« Lancez le seed pour créer la séquence… » dans `/reminders`) plutôt qu'un état vide guidant l'action (le dashboard, lui, a désormais un état vide calme).
-5. **Pas de feedback de chargement** : la primitive `skeleton` a été ajoutée mais n'est importée nulle part et aucune section data n'est enveloppée dans `<Suspense>` → les pages `force-dynamic` affichent la latence DB sans squelette.
+2. **Devise incohérente** : seed en `CAD`, `formatCurrency`/`Payment` par défaut `EUR`, dashboard (KPIs + buckets d'ancienneté) prend « la devise de la première facture » → risque d'agrégats mélangeant des devises sans conversion.
+3. **États vides ad hoc** : certaines pages s'appuient encore sur des messages bruts (« Lancez le seed pour créer la séquence… » dans `/reminders`) plutôt qu'un état vide guidant l'action (le dashboard, lui, a désormais un état vide calme).
+4. **Pas de feedback de chargement** : la primitive `skeleton` a été ajoutée mais n'est importée nulle part et aucune section data n'est enveloppée dans `<Suspense>` → les pages `force-dynamic` affichent la latence DB sans squelette.
 
-### 5 quick wins techniques
+> ~~Auth trompeuse~~ — **résolu** : login/register fonctionnels, routes protégées par middleware.
+
+### 4 quick wins techniques
 
 1. **Ajouter Prettier + un workflow CI** (lint + typecheck + build) pour verrouiller la qualité à chaque push.
 2. **Réduire le log Prisma en dev** (`["query"]` est bruyant) et n'activer `query` que derrière un flag — gain de lisibilité et perfs.
 3. **Centraliser la devise** (champ org `defaultCurrency` ou refus d'agréger des devises différentes) pour fiabiliser le dashboard et les montants.
 4. **Premiers tests unitaires ciblés** sur la logique pure déjà bien isolée : `eligible-steps.ts`, `render-template.ts`, `invoices/status.ts`, `reminderEventLabel` — fort ROI, zéro dépendance DB.
-5. **Garde de route minimale** : un `middleware.ts` (ou un check dans `(dashboard)/layout.tsx`) qui prépare le branchement auth, même en renvoyant l'org démo, pour éviter d'avoir à réécrire les pages plus tard.
+
+> ~~Garde de route minimale~~ — **résolu** : middleware racine opérationnel.
 
 ---
 
@@ -288,6 +323,6 @@ Une page du dashboard est un **Server Component** (`async`) rendant `export cons
 
 1. **Next.js 15 (App Router) + TS strict + Tailwind/shadcn + Prisma/Postgres** : base technique propre et cohérente.
 2. **Cœur métier relances opérationnel** : clients/factures/templates/séquence CRUD, simulation locale, email **test** et email **client** (opt-in `emailSendingEnabled` + confirmation), historique tracé.
-3. **Resend est la seule intégration réelle** ; Stripe, Twilio et Supabase ne sont que des noms de variables réservés.
-4. **Pas d'auth ni de vrai multi-tenant** : une org de démo figée via un helper temporaire ; routes dashboard non protégées.
-5. **Dette principale** : aucun test, pas de cron (tout manuel), reliquat de config `darkMode`, incohérence de devise, et écrans d'auth factices à remplacer.
+3. **Deux intégrations réelles** : **Resend** (email) et **Supabase** (auth + session + protection des routes). Stripe et Twilio restent réservés.
+4. **Auth et multi-tenant opérationnels** : session Supabase, middleware de protection, provisionnement automatique User+Org+Membership au 1er login, isolation par `org.id` effective.
+5. **Dette principale** : aucun test, pas de cron (tout manuel), reliquat de config `darkMode`, incohérence de devise.

@@ -77,8 +77,8 @@ async function main() {
   // Utilisateur de démonstration
   const user = await prisma.user.upsert({
     where: { id: DEMO_USER_ID },
-    update: { email: DEMO_USER_EMAIL, name: DEMO_USER_NAME },
-    create: { id: DEMO_USER_ID, email: DEMO_USER_EMAIL, name: DEMO_USER_NAME },
+    update: { email: DEMO_USER_EMAIL, name: DEMO_USER_NAME, supabaseId: null },
+    create: { id: DEMO_USER_ID, email: DEMO_USER_EMAIL, name: DEMO_USER_NAME, supabaseId: null },
   });
   console.log(`👤 Utilisateur: ${user.email}`);
 
