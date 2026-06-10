@@ -9,16 +9,11 @@ import { createClient } from "@/lib/supabase/server";
  * Séquence :
  * 1. Lit l'utilisateur authentifié via supabase.auth.getUser().
  *    → redirect /login si aucune session valide.
- * 2. Trouve le User Prisma correspondant (supabaseId = user.id Supabase).
- *    → si absent : création à la volée (premier login).
+ * 2. Trouve le User Prisma par supabaseId.
+ *    → si absent : upsert par email (crée ou rattache un user orphelin).
  * 3. Trouve le premier Membership du User (orderBy createdAt asc).
- *    → redirect /login si aucun membership.
+ *    → si absent : premier login réel → crée Organization + Membership en transaction.
  * 4. Retourne membership.organization.
- *
- * Création à la volée (premier login) :
- * - User { supabaseId, email, name } + Organization { name: "Mon organisation" }
- *   + Membership { role: OWNER } créés en une transaction.
- * - Retourne la nouvelle Organization directement.
  *
  * La signature de retour reste Promise<Organization> — les appelants ne changent pas.
  * À n'appeler que côté serveur (Server Components / Server Actions).
@@ -34,35 +29,19 @@ export async function getCurrentOrganization() {
     redirect("/login");
   }
 
-  // Trouve le User Prisma lié à ce compte Supabase.
-  const prismaUser = await prisma.user.findUnique({
-    where: { supabaseId: user.id },
-  });
-
-  if (!prismaUser) {
-    // Premier login : crée User + Organization + Membership en une transaction.
-    const org = await prisma.$transaction(async (tx) => {
-      const newOrg = await tx.organization.create({
-        data: { name: "Mon organisation" },
-      });
-      await tx.user.create({
-        data: {
-          supabaseId: user.id,
-          email: user.email ?? "",
-          name:
-            (user.user_metadata?.full_name as string | undefined) ?? null,
-          memberships: {
-            create: {
-              organizationId: newOrg.id,
-              role: "OWNER",
-            },
-          },
-        },
-      });
-      return newOrg;
-    });
-    return org;
-  }
+  // Trouve le User Prisma par supabaseId ; si absent, upsert par email.
+  // Protège contre P2002 quand un User existe déjà avec cet email sans supabaseId.
+  const prismaUser =
+    (await prisma.user.findUnique({ where: { supabaseId: user.id } })) ??
+    (await prisma.user.upsert({
+      where: { email: user.email! },
+      update: { supabaseId: user.id },
+      create: {
+        email: user.email!,
+        name: (user.user_metadata?.full_name as string | undefined) ?? null,
+        supabaseId: user.id,
+      },
+    }));
 
   // Trouve le premier Membership (le plus ancien) et retourne l'org.
   const membership = await prisma.membership.findFirst({
@@ -72,7 +51,21 @@ export async function getCurrentOrganization() {
   });
 
   if (!membership) {
-    redirect("/login");
+    // Premier login réel : aucun Membership → crée Organization + Membership.
+    const org = await prisma.$transaction(async (tx) => {
+      const newOrg = await tx.organization.create({
+        data: { name: "Mon organisation" },
+      });
+      await tx.membership.create({
+        data: {
+          userId: prismaUser.id,
+          organizationId: newOrg.id,
+          role: "OWNER",
+        },
+      });
+      return newOrg;
+    });
+    return org;
   }
 
   return membership.organization;
