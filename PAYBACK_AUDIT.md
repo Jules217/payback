@@ -6,6 +6,7 @@
 > Mis à jour après la **queue manuelle de relances** (étapes 1–4) : index partiel `uniq_reminder_active`, baseline Prisma Migrate, `SCHEDULED` dans `CONSUMING_STATUSES`, actions `enqueueReminder`/`dequeueReminder`/`sendQueue`, page `/reminders/queue`, entrée "File d'attente" dans la nav avec badge de compteur.
 > Mis à jour après le **batch enqueue** : `batchEnqueueReminders` dans `invoices/actions.ts`, `InvoicesTableClient` (cases à cocher + barre d'action), `checkbox` shadcn ajouté, `/invoices` délègue son tableau au Client Component.
 > Mis à jour après l'**intégration Auth Supabase** (phases 1–4) : `@supabase/supabase-js` + `@supabase/ssr`, middleware racine, `getCurrentOrganization` réécrit sur session réelle, login/register/logout fonctionnels, `User.supabaseId`, migration `20260609000002`, `lib/constants.ts` supprimé, `force-dynamic` retiré du layout.
+> Mis à jour après le **cron batch enqueue** : `batchEnqueueForOrg` extrait dans `lib/reminders/batch-enqueue.ts`, route `/api/cron/reminders` (Bearer token), `vercel.json` (schedule `0 7 * * *`), `CRON_SECRET` dans `.env.example`.
 
 ---
 
@@ -18,7 +19,7 @@
 | React | 19.0.0 / react-dom 19.0.0 |
 | Version de Node | **non trouvé** (pas de `.nvmrc`, pas de champ `engines` dans `package.json`) |
 | Gestionnaire de paquets | **npm** (présence de `package-lock.json`, scripts `npm run …`) |
-| Build/config | `next.config.mjs` (`reactStrictMode: true` uniquement), PostCSS + Autoprefixer |
+| Build/config | `next.config.mjs` (`reactStrictMode: true` uniquement), `vercel.json` (cron `0 7 * * *`), PostCSS + Autoprefixer |
 
 ### Dépendances clés par usage
 
@@ -51,6 +52,7 @@
 ```
 payback/
 ├─ middleware.ts          protection des routes dashboard (updateSession + redirects)
+├─ vercel.json            configuration Vercel (Cron Jobs : /api/cron/reminders, schedule 0 7 * * *)
 ├─ app/
 │  ├─ (auth)/            login, register (fonctionnels), logout/ (Route Handler)
 │  ├─ (dashboard)/       layout (sidebar + header [+ burger mobile] + bandeau)
@@ -61,6 +63,7 @@ payback/
 │  │  ├─ templates/      liste + new + [templateId] (+ edit)
 │  │  └─ settings/       nom de l'organisation + config envoi email
 │  ├─ api/health/        route de santé
+│  ├─ api/cron/reminders/ cron batch enqueue (Bearer token, toutes les orgs, 1re étape éligible)
 │  ├─ layout.tsx         root (polices Hanken Grotesk + Fraunces + IBM Plex Mono, metadata)
 │  └─ page.tsx           landing
 ├─ components/
@@ -108,6 +111,7 @@ payback/
 | `/templates/[templateId]/edit` | Édition modèle |
 | `/settings` | **Nom de l'organisation** (card `OrgNameForm` + action `updateOrgName`) + **Envoi email** (opt-in, nom d'expéditeur, reply-to) |
 | `/api/health` | Endpoint de santé |
+| `/api/cron/reminders` | Cron Vercel — enqueue la 1re étape éligible (mode CLIENT) pour toutes les orgs. Protégé par Bearer `CRON_SECRET`. Traitement par tranches de 5 orgs en parallèle. |
 
 ---
 
@@ -220,7 +224,7 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
 - **Séquence J+7 / J+14 / J+30** : pas codée en dur — stockée en base sous forme de `ReminderSequence` + `ReminderStep[]` (offsetDays, channel, order, isActive, templateId). Le seed crée la séquence standard. L'éligibilité est calculée dans `lib/reminders/eligible-steps.ts` : `eligibleSteps(invoice, steps, events)` (J+N applicable si `daysOverdue ≥ N`, facture ni payée ni annulée, offset non « consommé ») et `countEligibleByOffset(…)`.
 - **Modèles & tons** : `MessageTemplate` (subject/body avec variables `{{…}}`) + enum `ReminderTone GENTLE/PROFESSIONAL/FIRM`. Le ton d'une étape est **dérivé du template lié**. Rendu via `lib/reminders/render-template.ts` (`interpolate`, tokens : client_name, organization_name, invoice_number, amount, due_date, payment_link ; token inconnu → chaîne vide). Preview live côté client via `lib/reminders/preview.ts`.
 - **CONSUMING_STATUSES** (dans `lib/reminders/eligible-steps.ts`) : `["SCHEDULED", "SIMULATED", "SENT"]` — une étape dont l'offset correspond à un événement dans l'un de ces trois statuts est considérée « consommée » et n'est plus éligible. **SCHEDULED a été ajouté** lors de l'implémentation de la queue manuelle ; la page de détail facture calcule un `scheduledOffsets` séparé pour distinguer « En file » (badge Clock, bouton désactivé) de « Déjà traitée » (SIMULATED/SENT).
-- **Déclenchement automatique** : **aucun**. Pas de cron, de job planifié ni de queue automatique. Le statut `OVERDUE` lui-même n'est **pas persisté** (calculé à l'affichage, `lib/invoices/status.ts`). Six actions **manuelles** dans `app/(dashboard)/reminders/actions.ts` :
+- **Déclenchement automatique** : **cron Vercel** (`/api/cron/reminders`, `GET`, schedule `0 7 * * *` — 7h UTC). Appelle `batchEnqueueForOrg` (`lib/reminders/batch-enqueue.ts`) directement via Prisma, sans session Supabase. Protégé par Bearer `CRON_SECRET`. Le statut `OVERDUE` lui-même n'est **pas persisté** (calculé à l'affichage, `lib/invoices/status.ts`). Six actions **manuelles** dans `app/(dashboard)/reminders/actions.ts` :
   - `simulateReminderForInvoice` → `ReminderEvent{SIMULATED}` (aucun envoi, anti-doublon strict) ;
   - `sendTestReminderForInvoice` → envoi réel **uniquement** vers `RESEND_TEST_RECIPIENT` (pas d'anti-doublon, confirmation UI) ;
   - `sendClientReminderForInvoice` → envoi réel vers `client.email`, **bloqué tant que `emailSendingEnabled=false`**, anti-doublon par offset en mode CLIENT, confirmation obligatoire.
@@ -239,6 +243,7 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
 | **SMS — Twilio** | **Non branché / non installé.** `ReminderChannel.SMS` existe dans le modèle mais aucun envoi SMS. | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (commentés dans `.env.example`) |
 | **Paiement — Stripe** | **Non branché / non installé.** `Invoice.paymentUrl` est un simple champ texte (liens factices dans le seed, ex. `https://pay.payback-demo.app/…`). | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (commentés) |
 | **Auth — Supabase** | **Branché** (`@supabase/supabase-js` + `@supabase/ssr`). Login / register / logout fonctionnels. Routes dashboard protégées par `middleware.ts` racine. Session gérée via cookie `sb-{ref}-auth-token` rafraîchi à chaque requête par `updateSession`. Provisionnement automatique User+Org+Membership au 1er login. | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (présents dans `.env`) |
+| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible (mode CLIENT) pour toutes les orgs, 7h UTC quotidien. Bypass Supabase Auth : appelle `batchEnqueueForOrg` via Prisma direct. | `CRON_SECRET` (commenté dans `.env.example`) |
 | **Base de données** | Requise. | `DATABASE_URL` |
 | **App** | — | `NEXT_PUBLIC_APP_URL` |
 
@@ -294,6 +299,7 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 > ~~`lib/current-organization.ts`~~ — **résolu** : reécrit sur session Supabase réelle (plus temporaire).
 > ~~`lib/constants.ts`~~ — **résolu** : fichier supprimé.
 > ~~`app/(auth)/login` & `register`~~ — **résolu** : formulaires fonctionnels avec Supabase Auth.
+> ~~Déclenchement automatique absent~~ — **résolu** : cron Vercel `/api/cron/reminders`, `0 7 * * *`, Bearer `CRON_SECRET`.
 
 ---
 
@@ -325,4 +331,4 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 2. **Cœur métier relances opérationnel** : clients/factures/templates/séquence CRUD, simulation locale, email **test** et email **client** (opt-in `emailSendingEnabled` + confirmation), historique tracé.
 3. **Deux intégrations réelles** : **Resend** (email) et **Supabase** (auth + session + protection des routes). Stripe et Twilio restent réservés.
 4. **Auth et multi-tenant opérationnels** : session Supabase, middleware de protection, provisionnement automatique User+Org+Membership au 1er login, isolation par `org.id` effective.
-5. **Dette principale** : aucun test, pas de cron (tout manuel), reliquat de config `darkMode`, incohérence de devise.
+5. **Dette principale** : aucun test, reliquat de config `darkMode`, incohérence de devise. Cron opérationnel (`vercel.json`, `0 7 * * *`) — envoi réel encore opt-in (`emailSendingEnabled`).

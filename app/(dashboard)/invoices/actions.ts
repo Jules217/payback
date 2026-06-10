@@ -6,8 +6,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { invoiceFormSchema } from "@/lib/validations/invoice";
-import { eligibleSteps } from "@/lib/reminders/eligible-steps";
-import { renderTemplate } from "@/lib/reminders/render-template";
+import { batchEnqueueForOrg } from "@/lib/reminders/batch-enqueue";
 
 export type BatchEnqueueResult = {
   ok: boolean;
@@ -240,68 +239,7 @@ export async function batchEnqueueReminders(
     };
   }
 
-  const invoices = await prisma.invoice.findMany({
-    where: { id: { in: invoiceIds }, organizationId: org.id },
-    include: {
-      client: { select: { id: true, name: true, companyName: true, email: true } },
-      reminderEvents: { select: { offsetDays: true, status: true, deliveryMode: true } },
-    },
-  });
-
-  const sequence = await prisma.reminderSequence.findFirst({
-    where: { organizationId: org.id, isActive: true },
-    include: {
-      steps: {
-        where: { isActive: true },
-        include: { template: true },
-        orderBy: { offsetDays: "asc" },
-      },
-    },
-  });
-
-  const activeSteps = sequence?.steps.filter((s) => s.template?.isActive) ?? [];
-
-  let ajoutées = 0;
-  let ignorées = 0;
-
-  for (const invoice of invoices) {
-    const clientEmail = invoice.client.email?.trim();
-    if (!clientEmail) { ignorées++; continue; }
-
-    const eligible = eligibleSteps(invoice, activeSteps, invoice.reminderEvents);
-    const step = eligible[0];
-    if (!step || !step.template) { ignorées++; continue; }
-
-    const { subject, body } = renderTemplate({
-      subjectTemplate: step.template.subject ?? "",
-      bodyTemplate: step.template.body ?? "",
-      invoice,
-      client: invoice.client,
-      organization: org,
-    });
-
-    try {
-      await prisma.reminderEvent.create({
-        data: {
-          organizationId: org.id,
-          invoiceId: invoice.id,
-          channel: "EMAIL",
-          status: "SCHEDULED",
-          deliveryMode: "CLIENT",
-          scheduledAt: new Date(),
-          sentAt: null,
-          offsetDays: step.offsetDays,
-          messageSubject: subject,
-          messageBody: body,
-          recipientEmail: clientEmail,
-        },
-      });
-      ajoutées++;
-    } catch {
-      // Doublon détecté par uniq_reminder_active ou autre contrainte — skip silencieux.
-      ignorées++;
-    }
-  }
+  const { ajoutées, ignorées } = await batchEnqueueForOrg(org, invoiceIds);
 
   const msgAjoutées = `${ajoutées} relance${ajoutées > 1 ? "s" : ""} ajoutée${ajoutées > 1 ? "s" : ""} à la file.`;
   const msgIgnorées =
