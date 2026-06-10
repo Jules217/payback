@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { formatCurrency, cn } from "@/lib/utils";
 import { displayStatus } from "@/lib/invoices/status";
+import { hasProFeatures } from "@/lib/subscription";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { InvoicesTableClient } from "@/components/invoices/invoices-table-client";
@@ -194,7 +195,7 @@ export default async function InvoicesPage({ searchParams }: PageProps) {
           </CardContent>
         </Card>
       ) : (
-        <InvoicesTableClient rows={rows} />
+        <InvoicesTableClient rows={rows} hasPro={hasProFeatures(org)} />
       )}
     </div>
   );

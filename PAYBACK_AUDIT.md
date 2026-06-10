@@ -7,6 +7,7 @@
 > Mis à jour après le **batch enqueue** : `batchEnqueueReminders` dans `invoices/actions.ts`, `InvoicesTableClient` (cases à cocher + barre d'action), `checkbox` shadcn ajouté, `/invoices` délègue son tableau au Client Component.
 > Mis à jour après l'**intégration Auth Supabase** (phases 1–4) : `@supabase/supabase-js` + `@supabase/ssr`, middleware racine, `getCurrentOrganization` réécrit sur session réelle, login/register/logout fonctionnels, `User.supabaseId`, migration `20260609000002`, `lib/constants.ts` supprimé, `force-dynamic` retiré du layout.
 > Mis à jour après le **cron batch enqueue** : `batchEnqueueForOrg` extrait dans `lib/reminders/batch-enqueue.ts`, route `/api/cron/reminders` (Bearer token), `vercel.json` (schedule `0 7 * * *`), `CRON_SECRET` dans `.env.example`.
+> Mis à jour après l'**envoi automatique opt-in (étape 4)** : `autoSendEnabled` sur `Organization` (migration `20260610053253`), `sendQueueForOrg` dans `batch-enqueue.ts`, cron envoie la file si opt-in, card « Envoi automatique » + Switch dans `/settings`.
 
 ---
 
@@ -195,13 +196,14 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
   - `0_init/migration.sql` — baseline DDL complet de tout le schéma, appliqué via `migrate resolve --applied 0_init` (la DB existait avant l'adoption de `migrate`).
   - `20260609000001_reminder_queue/migration.sql` — index partiel `uniq_reminder_active` (voir ci-dessous).
   - `20260609000002_add_supabase_id/migration.sql` — ajoute `"supabaseId" TEXT` + index unique sur `User`.
+  - `20260610053253_add_auto_send_enabled/migration.sql` — ajoute `"autoSendEnabled" BOOLEAN NOT NULL DEFAULT false` sur `Organization`.
 
 ### Modèles (champs principaux)
 
 | Modèle | Champs clés |
 | --- | --- |
 | `User` | id, **supabaseId** (String?, unique — lien vers l'identité Supabase Auth), email (unique), name, timestamps · relation `memberships` |
-| `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo** · relations clients/invoices/payments/sequences/templates/events |
+| `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo**, **autoSendEnabled** (bool, défaut false — active l'envoi automatique par le cron) · relations clients/invoices/payments/sequences/templates/events |
 | `Membership` | userId, organizationId, role (`MemberRole OWNER/ADMIN/MEMBER`), unique (user, org) |
 | `Client` | name, companyName, email, phone, preferredChannel (`EMAIL/SMS/BOTH`), language (`FR/EN`), status (`ACTIVE/ARCHIVED`), notes |
 | `Invoice` | number, amountCents (Int), currency (défaut `CAD`), issuedAt, dueAt, status (`DRAFT/SENT/PENDING/OVERDUE/PAID/CANCELLED`), paymentUrl, paidAt |
@@ -243,7 +245,7 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
 | **SMS — Twilio** | **Non branché / non installé.** `ReminderChannel.SMS` existe dans le modèle mais aucun envoi SMS. | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (commentés dans `.env.example`) |
 | **Paiement — Stripe** | **Non branché / non installé.** `Invoice.paymentUrl` est un simple champ texte (liens factices dans le seed, ex. `https://pay.payback-demo.app/…`). | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (commentés) |
 | **Auth — Supabase** | **Branché** (`@supabase/supabase-js` + `@supabase/ssr`). Login / register / logout fonctionnels. Routes dashboard protégées par `middleware.ts` racine. Session gérée via cookie `sb-{ref}-auth-token` rafraîchi à chaque requête par `updateSession`. Provisionnement automatique User+Org+Membership au 1er login. | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (présents dans `.env`) |
-| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible (mode CLIENT) pour toutes les orgs, 7h UTC quotidien. Bypass Supabase Auth : appelle `batchEnqueueForOrg` via Prisma direct. | `CRON_SECRET` (commenté dans `.env.example`) |
+| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible pour toutes les orgs (7h UTC, traitement séquentiel). Si `org.autoSendEnabled && ajoutées > 0` : appelle `sendQueueForOrg` → envoie la file sans intervention manuelle (respecte `emailSendingEnabled`). Réponse JSON inclut `auto_envoyés`. | `CRON_SECRET` (commenté dans `.env.example`) |
 | **Base de données** | Requise. | `DATABASE_URL` |
 | **App** | — | `NEXT_PUBLIC_APP_URL` |
 
@@ -299,7 +301,7 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 > ~~`lib/current-organization.ts`~~ — **résolu** : reécrit sur session Supabase réelle (plus temporaire).
 > ~~`lib/constants.ts`~~ — **résolu** : fichier supprimé.
 > ~~`app/(auth)/login` & `register`~~ — **résolu** : formulaires fonctionnels avec Supabase Auth.
-> ~~Déclenchement automatique absent~~ — **résolu** : cron Vercel `/api/cron/reminders`, `0 7 * * *`, Bearer `CRON_SECRET`.
+> ~~Déclenchement automatique absent~~ — **résolu** : cron Vercel `0 7 * * *` + `autoSendEnabled` opt-in (Switch dans `/settings`) + `sendQueueForOrg` dans `lib/reminders/batch-enqueue.ts`.
 
 ---
 

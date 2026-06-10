@@ -1,16 +1,59 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
+import { createClient } from "@/lib/supabase/server";
 import { emailSettingsSchema, orgNameSchema } from "@/lib/validations/settings";
+import { getCheckoutUrl } from "@/lib/lemonsqueezy";
 
 export type SettingsFormState = {
   ok: boolean;
   message?: string;
   errors?: Record<string, string[]>;
 };
+
+/**
+ * Crée un checkout Lemon Squeezy pour le plan donné et redirige vers la page de paiement.
+ * Si la création échoue (env vars absentes, erreur API), renvoie un état d'erreur.
+ */
+export async function startCheckout(
+  plan: "STARTER" | "PRO"
+): Promise<SettingsFormState> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.email) redirect("/login");
+
+  const org = await getCurrentOrganization();
+
+  const variantId =
+    plan === "PRO"
+      ? process.env.LEMONSQUEEZY_VARIANT_PRO
+      : process.env.LEMONSQUEEZY_VARIANT_STARTER;
+
+  if (!variantId) {
+    return { ok: false, message: "Plan non configuré. Contactez le support." };
+  }
+
+  let url: string;
+  try {
+    url = await getCheckoutUrl({ variantId, email: user.email, orgId: org.id });
+  } catch (e) {
+    return {
+      ok: false,
+      message:
+        e instanceof Error
+          ? e.message
+          : "Erreur lors de la création du checkout.",
+    };
+  }
+
+  redirect(url);
+}
 
 export async function updateOrgName(
   _prevState: SettingsFormState,

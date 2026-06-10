@@ -7,6 +7,11 @@ import { ListChecks } from "lucide-react";
 
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   invoiceStatusLabels,
   invoiceStatusVariants,
   invoiceStatusBadgeClasses,
@@ -41,9 +46,10 @@ export type InvoiceRow = {
 
 interface InvoicesTableClientProps {
   rows: InvoiceRow[];
+  hasPro?: boolean;
 }
 
-export function InvoicesTableClient({ rows }: InvoicesTableClientProps) {
+export function InvoicesTableClient({ rows, hasPro = false }: InvoicesTableClientProps) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<{ message: string; ok: boolean } | null>(null);
@@ -115,18 +121,34 @@ export function InvoicesTableClient({ rows }: InvoicesTableClientProps) {
             )}
           </span>
           {selectedIds.size > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              disabled={isPending}
-              onClick={handleBatchEnqueue}
-            >
-              <ListChecks className="size-4" />
-              {isPending
-                ? "Mise en file…"
-                : `Ajouter à la file (${selectedIds.size})`}
-            </Button>
+            hasPro ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                disabled={isPending}
+                onClick={handleBatchEnqueue}
+              >
+                <ListChecks className="size-4" />
+                {isPending
+                  ? "Mise en file…"
+                  : `Ajouter à la file (${selectedIds.size})`}
+              </Button>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button variant="outline" size="sm" className="gap-2" disabled>
+                      <ListChecks className="size-4" />
+                      Ajouter à la file ({selectedIds.size})
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Fonctionnalité réservée aux abonnés Pro.
+                </TooltipContent>
+              </Tooltip>
+            )
           )}
         </div>
       )}

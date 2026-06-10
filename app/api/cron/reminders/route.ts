@@ -5,6 +5,7 @@ import {
   batchEnqueueForOrg,
   sendQueueForOrg,
 } from "@/lib/reminders/batch-enqueue";
+import { hasProFeatures } from "@/lib/subscription";
 
 type OrgDetail = {
   orgId: string;
@@ -28,6 +29,8 @@ export async function GET(request: NextRequest) {
     const details: OrgDetail[] = [];
 
     for (const org of orgs) {
+      if (!hasProFeatures(org)) continue;
+
       const { ajoutées, ignorées } = await batchEnqueueForOrg(org, []);
       let auto_envoyés = 0;
       let auto_échoués = 0;

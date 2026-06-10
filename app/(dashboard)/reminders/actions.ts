@@ -11,6 +11,7 @@ import { sequenceFormSchema } from "@/lib/validations/sequence";
 import { sendReminderEmail } from "@/lib/email/send-reminder-email";
 import { getTestRecipient } from "@/lib/email/config";
 import { stepOffsetLabel } from "@/lib/labels";
+import { hasProFeatures } from "@/lib/subscription";
 
 export type SequenceFormState = {
   ok: boolean;
@@ -72,6 +73,16 @@ export async function sendQueue(
   const empty: SendQueueResult = { ok: true, envoyés: 0, échoués: 0, détails: [] };
 
   const org = await getCurrentOrganization();
+
+  if (!hasProFeatures(org)) {
+    return {
+      ok: false,
+      message: "L'envoi groupé requiert un abonnement Pro actif.",
+      envoyés: 0,
+      échoués: 0,
+      détails: [],
+    };
+  }
 
   if (!org.emailSendingEnabled) {
     return {

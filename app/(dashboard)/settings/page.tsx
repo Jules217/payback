@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import { Settings } from "lucide-react";
 
 import { getCurrentOrganization } from "@/lib/current-organization";
+import { hasActiveSubscription, subscriptionLabel } from "@/lib/subscription";
 import { AutoSendForm } from "@/components/settings/auto-send-form";
 import { EmailSettingsForm } from "@/components/settings/email-settings-form";
 import { OrgNameForm } from "@/components/settings/org-name-form";
+import { SubscriptionCard } from "@/components/settings/subscription-card";
 import {
   Card,
   CardContent,
@@ -59,6 +61,25 @@ export default async function SettingsPage() {
               emailFromName: org.emailFromName ?? "",
               emailReplyTo: org.emailReplyTo ?? "",
             }}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Abonnement</CardTitle>
+          <CardDescription>
+            Gérez votre plan Payback. L&apos;envoi groupé et le cron automatique
+            sont réservés aux abonnés Pro.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SubscriptionCard
+            status={org.subscriptionStatus}
+            plan={org.subscriptionPlan ?? null}
+            endsAt={org.subscriptionEndsAt?.toISOString() ?? null}
+            label={subscriptionLabel(org)}
+            hasActive={hasActiveSubscription(org)}
           />
         </CardContent>
       </Card>

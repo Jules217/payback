@@ -43,6 +43,13 @@ model Organization {
   /** Envoi automatique par le cron : si true, le cron envoie sans intervention manuelle. */
   autoSendEnabled Boolean @default(false)
 
+  // ── Abonnement Lemon Squeezy ──────────────────────────────────
+  lemonSqueezyCustomerId     String?
+  lemonSqueezySubscriptionId String?
+  subscriptionStatus         SubscriptionStatus @default(INACTIVE)
+  subscriptionEndsAt         DateTime?
+  subscriptionPlan           SubscriptionPlan?
+
   members           Membership[]
   clients           Client[]
   invoices          Invoice[]
@@ -286,4 +293,19 @@ enum ReminderDeliveryMode {
   SIMULATION
   TEST
   CLIENT
+}
+
+// ── Abonnement Lemon Squeezy ──────────────────────────────────
+
+enum SubscriptionStatus {
+  INACTIVE  // jamais souscrit ou expiré
+  TRIALING  // essai gratuit en cours
+  ACTIVE    // abonnement actif payant
+  PAST_DUE  // paiement en échec
+  CANCELLED // annulé, accès jusqu'à subscriptionEndsAt
+}
+
+enum SubscriptionPlan {
+  STARTER
+  PRO
 }

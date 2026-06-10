@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { invoiceFormSchema } from "@/lib/validations/invoice";
 import { batchEnqueueForOrg } from "@/lib/reminders/batch-enqueue";
+import { hasProFeatures } from "@/lib/subscription";
 
 export type BatchEnqueueResult = {
   ok: boolean;
@@ -229,6 +230,15 @@ export async function batchEnqueueReminders(
   }
 
   const org = await getCurrentOrganization();
+
+  if (!hasProFeatures(org)) {
+    return {
+      ok: false,
+      message: "L'envoi groupé requiert un abonnement Pro actif.",
+      ajoutées: 0,
+      ignorées: 0,
+    };
+  }
 
   if (!org.emailSendingEnabled) {
     return {
