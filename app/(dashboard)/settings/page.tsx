@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Settings } from "lucide-react";
 
 import { getCurrentOrganization } from "@/lib/current-organization";
+import { AutoSendForm } from "@/components/settings/auto-send-form";
 import { EmailSettingsForm } from "@/components/settings/email-settings-form";
 import { OrgNameForm } from "@/components/settings/org-name-form";
 import {
@@ -59,6 +60,19 @@ export default async function SettingsPage() {
               emailReplyTo: org.emailReplyTo ?? "",
             }}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Envoi automatique</CardTitle>
+          <CardDescription>
+            Quand activé, le cron du matin envoie automatiquement toutes les
+            relances éligibles sans intervention manuelle. Désactivé par défaut.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AutoSendForm defaultEnabled={org.autoSendEnabled} />
         </CardContent>
       </Card>
     </div>

@@ -43,6 +43,26 @@ export async function updateOrgName(
 }
 
 /**
+ * Active ou désactive l'envoi automatique par le cron pour l'organisation courante.
+ */
+export async function updateAutoSend(
+  enabled: boolean
+): Promise<SettingsFormState> {
+  const org = await getCurrentOrganization();
+  await prisma.organization.update({
+    where: { id: org.id },
+    data: { autoSendEnabled: enabled },
+  });
+  revalidatePath("/settings");
+  return {
+    ok: true,
+    message: enabled
+      ? "Envoi automatique activé."
+      : "Envoi automatique désactivé.",
+  };
+}
+
+/**
  * Met à jour la configuration d'envoi email de l'organisation courante.
  *
  * C'est le seul point où `emailSendingEnabled` est activé : tant qu'il reste à

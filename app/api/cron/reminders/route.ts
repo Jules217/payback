@@ -1,13 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { batchEnqueueForOrg } from "@/lib/reminders/batch-enqueue";
+import {
+  batchEnqueueForOrg,
+  sendQueueForOrg,
+} from "@/lib/reminders/batch-enqueue";
 
 type OrgDetail = {
   orgId: string;
   orgName: string;
   ajoutées: number;
   ignorées: number;
+  auto_envoyés: number;
+  auto_échoués: number;
 };
 
 export async function GET(request: NextRequest) {
@@ -22,20 +27,30 @@ export async function GET(request: NextRequest) {
     const orgs = await prisma.organization.findMany();
     const details: OrgDetail[] = [];
 
-    // Traitement par tranches de 5 orgs en parallèle.
-    for (let i = 0; i < orgs.length; i += 5) {
-      const batch = orgs.slice(i, i + 5);
-      const results = await Promise.all(
-        batch.map(async (org) => {
-          const { ajoutées, ignorées } = await batchEnqueueForOrg(org, []);
-          return { orgId: org.id, orgName: org.name, ajoutées, ignorées };
-        })
-      );
-      details.push(...results);
+    for (const org of orgs) {
+      const { ajoutées, ignorées } = await batchEnqueueForOrg(org, []);
+      let auto_envoyés = 0;
+      let auto_échoués = 0;
+
+      if (org.autoSendEnabled && ajoutées > 0) {
+        const sent = await sendQueueForOrg(org);
+        auto_envoyés = sent.envoyés;
+        auto_échoués = sent.échoués;
+      }
+
+      details.push({
+        orgId: org.id,
+        orgName: org.name,
+        ajoutées,
+        ignorées,
+        auto_envoyés,
+        auto_échoués,
+      });
     }
 
     const total_ajoutées = details.reduce((sum, d) => sum + d.ajoutées, 0);
     const total_ignorées = details.reduce((sum, d) => sum + d.ignorées, 0);
+    const total_auto_envoyés = details.reduce((sum, d) => sum + d.auto_envoyés, 0);
 
     return NextResponse.json({
       ok: true,
@@ -43,6 +58,7 @@ export async function GET(request: NextRequest) {
       orgs_processed: orgs.length,
       total_ajoutées,
       total_ignorées,
+      total_auto_envoyés,
       détails: details,
     });
   } catch (e) {

@@ -40,6 +40,8 @@ model Organization {
   emailFromName String?
   /** Adresse reply-to appliquée aux relances envoyées aux clients. */
   emailReplyTo String?
+  /** Envoi automatique par le cron : si true, le cron envoie sans intervention manuelle. */
+  autoSendEnabled Boolean @default(false)
 
   members           Membership[]
   clients           Client[]

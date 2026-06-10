@@ -1,6 +1,7 @@
 import type { Organization } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { sendReminderEmail } from "@/lib/email/send-reminder-email";
 import { eligibleSteps } from "@/lib/reminders/eligible-steps";
 import { renderTemplate } from "@/lib/reminders/render-template";
 
@@ -103,4 +104,82 @@ export async function batchEnqueueForOrg(
   }
 
   return { ajoutées, ignorées };
+}
+
+export type SendQueueOrgResult = { envoyés: number; échoués: number };
+
+/**
+ * Envoie tous les ReminderEvent SCHEDULED/CLIENT d'une organisation.
+ *
+ * Variante de sendQueue() sans dépendance à la session Supabase ni revalidatePath
+ * — utilisable depuis un cron Route Handler.
+ * Respecte emailSendingEnabled : retourne { 0, 0 } si désactivé.
+ */
+export async function sendQueueForOrg(
+  org: Organization
+): Promise<SendQueueOrgResult> {
+  if (!org.emailSendingEnabled) return { envoyés: 0, échoués: 0 };
+
+  const events = await prisma.reminderEvent.findMany({
+    where: { organizationId: org.id, status: "SCHEDULED", deliveryMode: "CLIENT" },
+    orderBy: { scheduledAt: "asc" },
+    include: {
+      invoice: {
+        select: {
+          number: true,
+          amountCents: true,
+          currency: true,
+          dueAt: true,
+          paymentUrl: true,
+          client: { select: { name: true, companyName: true } },
+        },
+      },
+    },
+  });
+
+  let envoyés = 0;
+  let échoués = 0;
+  const now = new Date();
+
+  for (const event of events) {
+    if (!event.recipientEmail || !event.messageSubject || !event.messageBody) {
+      await prisma.reminderEvent.update({
+        where: { id: event.id },
+        data: { status: "FAILED", errorMessage: "Snapshot manquant." },
+      });
+      échoués++;
+      continue;
+    }
+
+    const result = await sendReminderEmail({
+      to: event.recipientEmail,
+      subject: event.messageSubject,
+      body: event.messageBody,
+      invoice: event.invoice,
+      client: event.invoice.client,
+      organization: org,
+      fromName: org.emailFromName,
+      replyTo: org.emailReplyTo,
+    });
+
+    if (result.success) {
+      await prisma.reminderEvent.update({
+        where: { id: event.id },
+        data: {
+          status: "SENT",
+          sentAt: now,
+          providerMessageId: result.providerMessageId ?? null,
+        },
+      });
+      envoyés++;
+    } else {
+      await prisma.reminderEvent.update({
+        where: { id: event.id },
+        data: { status: "FAILED", errorMessage: result.error ?? "Erreur inconnue." },
+      });
+      échoués++;
+    }
+  }
+
+  return { envoyés, échoués };
 }
