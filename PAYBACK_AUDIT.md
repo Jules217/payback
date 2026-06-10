@@ -8,6 +8,7 @@
 > Mis à jour après l'**intégration Auth Supabase** (phases 1–4) : `@supabase/supabase-js` + `@supabase/ssr`, middleware racine, `getCurrentOrganization` réécrit sur session réelle, login/register/logout fonctionnels, `User.supabaseId`, migration `20260609000002`, `lib/constants.ts` supprimé, `force-dynamic` retiré du layout.
 > Mis à jour après le **cron batch enqueue** : `batchEnqueueForOrg` extrait dans `lib/reminders/batch-enqueue.ts`, route `/api/cron/reminders` (Bearer token), `vercel.json` (schedule `0 7 * * *`), `CRON_SECRET` dans `.env.example`.
 > Mis à jour après l'**envoi automatique opt-in (étape 4)** : `autoSendEnabled` sur `Organization` (migration `20260610053253`), `sendQueueForOrg` dans `batch-enqueue.ts`, cron envoie la file si opt-in, card « Envoi automatique » + Switch dans `/settings`.
+> Mis à jour après l'**intégration Lemon Squeezy** (phases 2–6) : 2 enums + 5 champs sur `Organization` (migration `20260610191243`), `lib/subscription.ts` (hasActiveSubscription / hasProFeatures / subscriptionLabel), `lib/lemonsqueezy.ts` (getCheckoutUrl via fetch natif), webhook `/api/webhooks/lemonsqueezy` (vérification HMAC-SHA256, lookup org, sync statut), card « Abonnement » dans `/settings` (SubscriptionCard + `startCheckout`), gate `hasProFeatures` sur envoi groupé et cron, section Tarifs sur la landing.
 
 ---
 
@@ -44,7 +45,7 @@
 | Tooling (dev) | `tsx` | ^4.19.2 |
 | Lint | `eslint` ^8.57.1 + `eslint-config-next` 15.1.6 | — |
 
-**Auth** : `@supabase/supabase-js` (client JS + admin API) et `@supabase/ssr` (`createServerClient` / `createBrowserClient`, gestion des cookies de session). **SMS : aucune dépendance.** **Paiement : aucune dépendance.** **Data fetching client : aucune dépendance** (pas de React Query / SWR). Tout le data fetching passe par Prisma dans des Server Components.
+**Auth** : `@supabase/supabase-js` (client JS + admin API) et `@supabase/ssr` (`createServerClient` / `createBrowserClient`, gestion des cookies de session). **SMS : aucune dépendance.** **Paiement** : Lemon Squeezy via `fetch` natif (`lib/lemonsqueezy.ts` — pas de SDK npm) : création de checkout, réception de webhook, synchronisation du statut d'abonnement. **Data fetching client : aucune dépendance** (pas de React Query / SWR). Tout le data fetching passe par Prisma dans des Server Components.
 
 ---
 
@@ -65,8 +66,9 @@ payback/
 │  │  └─ settings/       nom de l'organisation + config envoi email
 │  ├─ api/health/        route de santé
 │  ├─ api/cron/reminders/ cron batch enqueue (Bearer token, toutes les orgs, 1re étape éligible)
+│  ├─ api/webhooks/lemonsqueezy/ webhook LS (POST, HMAC-SHA256, sync statut abonnement sur Organization)
 │  ├─ layout.tsx         root (polices Hanken Grotesk + Fraunces + IBM Plex Mono, metadata)
-│  └─ page.tsx           landing
+│  └─ page.tsx           landing (hero + features + section Tarifs : Starter 19 $/mois / Pro 49 $/mois)
 ├─ components/
 │  ├─ ui/                primitives (badge, button, card, input, label, select, table, textarea,
 │  │                     tabs, dialog, dropdown-menu, separator, skeleton, tooltip, sheet, chart)
@@ -78,9 +80,12 @@ payback/
 │  ├─ invoices/          status (overdue calculé)
 │  ├─ reminders/         eligible-steps, render-template, preview
 │  ├─ validations/       client, invoice, template, sequence, settings (zod)
+│  ├─ subscription.ts    hasActiveSubscription / hasProFeatures / subscriptionLabel
+│  ├─ lemonsqueezy.ts    getCheckoutUrl (fetch natif, pas de SDK)
 │  └─ (prisma, current-organization, labels, navigation, utils)
 ├─ prisma/               schema.prisma + seed.ts + migrations/ (migration_lock.toml, 0_init/,
-│                        20260609000001_reminder_queue/, 20260609000002_add_supabase_id/)
+│                        20260609000001_reminder_queue/, 20260609000002_add_supabase_id/,
+│                        20260610053253_add_auto_send_enabled/, 20260610191243_add_lemonsqueezy_subscription/)
 ├─ docs/                 PRODUCT.md, EMAIL_DELIVERY.md
 └─ types/                index.ts (types métier indépendants de Prisma)
 ```
@@ -89,7 +94,7 @@ payback/
 
 | Route | Rôle (une ligne) |
 | --- | --- |
-| `/` | Landing marketing (hero + 3 features + footer) |
+| `/` | Landing marketing (hero + 3 features + section **Tarifs** Starter 19 $/mois / Pro 49 $/mois + footer) |
 | `/login` | Connexion **fonctionnelle** — formulaire `useActionState` + `loginAction` (Supabase `signInWithPassword`, redirect `/dashboard`) |
 | `/register` | Inscription **fonctionnelle** — formulaire `useActionState` + `registerAction` (Supabase `signUp` avec `full_name`, gère email de confirmation) |
 | `/logout` | Route Handler GET — `signOut()` Supabase + redirect `/login` |
@@ -110,9 +115,10 @@ payback/
 | `/templates/new` | Création modèle (preview live) |
 | `/templates/[templateId]` | Détail modèle + étapes l'utilisant |
 | `/templates/[templateId]/edit` | Édition modèle |
-| `/settings` | **Nom de l'organisation** (card `OrgNameForm` + action `updateOrgName`) + **Envoi email** (opt-in, nom d'expéditeur, reply-to) |
+| `/settings` | **Nom de l'organisation** (card `OrgNameForm` + action `updateOrgName`) + **Envoi email** (opt-in, nom d'expéditeur, reply-to) + **Abonnement** (`SubscriptionCard` : badge statut, boutons checkout Starter/Pro, lien portail LS si actif) + **Envoi automatique** (Switch `autoSendEnabled`) |
 | `/api/health` | Endpoint de santé |
-| `/api/cron/reminders` | Cron Vercel — enqueue la 1re étape éligible (mode CLIENT) pour toutes les orgs. Protégé par Bearer `CRON_SECRET`. Traitement par tranches de 5 orgs en parallèle. |
+| `/api/cron/reminders` | Cron Vercel — enqueue la 1re étape éligible (mode CLIENT) **pour les orgs Pro uniquement** (`hasProFeatures`). Protégé par Bearer `CRON_SECRET`. Traitement séquentiel. |
+| `/api/webhooks/lemonsqueezy` | Webhook Lemon Squeezy (POST) — vérifie la signature HMAC-SHA256, mappe les événements `subscription_created/updated/expired`, résout l'org (org_id → customerId → email), met à jour `subscriptionStatus/Plan/EndsAt` sur `Organization`. |
 
 ---
 
@@ -197,13 +203,14 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
   - `20260609000001_reminder_queue/migration.sql` — index partiel `uniq_reminder_active` (voir ci-dessous).
   - `20260609000002_add_supabase_id/migration.sql` — ajoute `"supabaseId" TEXT` + index unique sur `User`.
   - `20260610053253_add_auto_send_enabled/migration.sql` — ajoute `"autoSendEnabled" BOOLEAN NOT NULL DEFAULT false` sur `Organization`.
+  - `20260610191243_add_lemonsqueezy_subscription/migration.sql` — crée les enums `SubscriptionStatus` (INACTIVE/TRIALING/ACTIVE/PAST_DUE/CANCELLED) et `SubscriptionPlan` (STARTER/PRO) ; ajoute 5 colonnes sur `Organization` : `lemonSqueezyCustomerId TEXT`, `lemonSqueezySubscriptionId TEXT`, `subscriptionStatus` (défaut `INACTIVE`), `subscriptionEndsAt TIMESTAMP`, `subscriptionPlan`.
 
 ### Modèles (champs principaux)
 
 | Modèle | Champs clés |
 | --- | --- |
 | `User` | id, **supabaseId** (String?, unique — lien vers l'identité Supabase Auth), email (unique), name, timestamps · relation `memberships` |
-| `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo**, **autoSendEnabled** (bool, défaut false — active l'envoi automatique par le cron) · relations clients/invoices/payments/sequences/templates/events |
+| `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo**, **autoSendEnabled** (bool, défaut false — active l'envoi automatique par le cron), **lemonSqueezyCustomerId** (Text?), **lemonSqueezySubscriptionId** (Text?), **subscriptionStatus** (`SubscriptionStatus`, défaut INACTIVE), **subscriptionEndsAt** (DateTime?), **subscriptionPlan** (`SubscriptionPlan`?) · relations clients/invoices/payments/sequences/templates/events |
 | `Membership` | userId, organizationId, role (`MemberRole OWNER/ADMIN/MEMBER`), unique (user, org) |
 | `Client` | name, companyName, email, phone, preferredChannel (`EMAIL/SMS/BOTH`), language (`FR/EN`), status (`ACTIVE/ARCHIVED`), notes |
 | `Invoice` | number, amountCents (Int), currency (défaut `CAD`), issuedAt, dueAt, status (`DRAFT/SENT/PENDING/OVERDUE/PAID/CANCELLED`), paymentUrl, paidAt |
@@ -243,9 +250,10 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
 | --- | --- | --- |
 | **Email — Resend** | **Branché** (SDK `resend`, client lazy `lib/email/resend.ts`). Envoi réel possible vers l'adresse de test ou, si opt-in, vers `client.email`. Fonctionne sans clé au build (init paresseuse, `EmailConfigError` propre). | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TEST_RECIPIENT` (présents et **vides** dans `.env.example`) |
 | **SMS — Twilio** | **Non branché / non installé.** `ReminderChannel.SMS` existe dans le modèle mais aucun envoi SMS. | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (commentés dans `.env.example`) |
-| **Paiement — Stripe** | **Non branché / non installé.** `Invoice.paymentUrl` est un simple champ texte (liens factices dans le seed, ex. `https://pay.payback-demo.app/…`). | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (commentés) |
+| **Paiement — Lemon Squeezy** | **Branché** (fetch natif, pas de SDK npm). `lib/lemonsqueezy.ts` crée des checkouts via l'API LS. `app/api/webhooks/lemonsqueezy/route.ts` reçoit et vérifie les événements (HMAC-SHA256), met à jour `subscriptionStatus/Plan/EndsAt` sur l'org. `lib/subscription.ts` expose `hasActiveSubscription`, `hasProFeatures`, `subscriptionLabel`. Gate `hasProFeatures` appliqué sur le cron et les actions d'envoi groupé. | `LEMONSQUEEZY_API_KEY`, `LEMONSQUEEZY_STORE_ID`, `LEMONSQUEEZY_WEBHOOK_SECRET`, `LEMONSQUEEZY_VARIANT_STARTER`, `LEMONSQUEEZY_VARIANT_PRO` (commentés dans `.env.example`) |
+| **Paiement — Stripe** | **Non branché / non utilisé** (remplacé par Lemon Squeezy). `Invoice.paymentUrl` reste un champ texte libre (liens factices dans le seed). | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (commentés, non utilisés) |
 | **Auth — Supabase** | **Branché** (`@supabase/supabase-js` + `@supabase/ssr`). Login / register / logout fonctionnels. Routes dashboard protégées par `middleware.ts` racine. Session gérée via cookie `sb-{ref}-auth-token` rafraîchi à chaque requête par `updateSession`. Provisionnement automatique User+Org+Membership au 1er login. | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (présents dans `.env`) |
-| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible pour toutes les orgs (7h UTC, traitement séquentiel). Si `org.autoSendEnabled && ajoutées > 0` : appelle `sendQueueForOrg` → envoie la file sans intervention manuelle (respecte `emailSendingEnabled`). Réponse JSON inclut `auto_envoyés`. | `CRON_SECRET` (commenté dans `.env.example`) |
+| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible **pour les orgs ayant `hasProFeatures`** (7h UTC, traitement séquentiel). Si `org.autoSendEnabled && ajoutées > 0` : appelle `sendQueueForOrg` → envoie la file sans intervention manuelle (respecte `emailSendingEnabled`). Réponse JSON inclut `auto_envoyés`. | `CRON_SECRET` (commenté dans `.env.example`) |
 | **Base de données** | Requise. | `DATABASE_URL` |
 | **App** | — | `NEXT_PUBLIC_APP_URL` |
 
@@ -302,6 +310,7 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 > ~~`lib/constants.ts`~~ — **résolu** : fichier supprimé.
 > ~~`app/(auth)/login` & `register`~~ — **résolu** : formulaires fonctionnels avec Supabase Auth.
 > ~~Déclenchement automatique absent~~ — **résolu** : cron Vercel `0 7 * * *` + `autoSendEnabled` opt-in (Switch dans `/settings`) + `sendQueueForOrg` dans `lib/reminders/batch-enqueue.ts`.
+> ~~Monétisation absente~~ — **résolu** : Lemon Squeezy intégré (phases 2–6) — checkout, webhook HMAC, modèle d'abonnement, gate `hasProFeatures` sur cron et envoi groupé.
 
 ---
 
@@ -315,6 +324,7 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 4. **Pas de feedback de chargement** : la primitive `skeleton` a été ajoutée mais n'est importée nulle part et aucune section data n'est enveloppée dans `<Suspense>` → les pages `force-dynamic` affichent la latence DB sans squelette.
 
 > ~~Auth trompeuse~~ — **résolu** : login/register fonctionnels, routes protégées par middleware.
+> ~~Paiement : aucune dépendance~~ — **résolu** : Lemon Squeezy intégré, checkout + webhook + gate Pro.
 
 ### 4 quick wins techniques
 
@@ -331,6 +341,7 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 
 1. **Next.js 15 (App Router) + TS strict + Tailwind/shadcn + Prisma/Postgres** : base technique propre et cohérente.
 2. **Cœur métier relances opérationnel** : clients/factures/templates/séquence CRUD, simulation locale, email **test** et email **client** (opt-in `emailSendingEnabled` + confirmation), historique tracé.
-3. **Deux intégrations réelles** : **Resend** (email) et **Supabase** (auth + session + protection des routes). Stripe et Twilio restent réservés.
+3. **Trois intégrations réelles** : **Resend** (email), **Supabase** (auth + session + protection des routes) et **Lemon Squeezy** (monétisation — checkout, webhook HMAC-SHA256, statut abonnement). Twilio reste réservé ; Stripe non utilisé (remplacé par LS).
 4. **Auth et multi-tenant opérationnels** : session Supabase, middleware de protection, provisionnement automatique User+Org+Membership au 1er login, isolation par `org.id` effective.
-5. **Dette principale** : aucun test, reliquat de config `darkMode`, incohérence de devise. Cron opérationnel (`vercel.json`, `0 7 * * *`) — envoi réel encore opt-in (`emailSendingEnabled`).
+5. **Monétisation opérationnelle** : modèle `SubscriptionStatus/Plan` sur `Organization`, `lib/subscription.ts` (hasActiveSubscription / hasProFeatures), gate Pro sur le cron (`/api/cron/reminders`) et les actions d'envoi groupé ; card Abonnement dans `/settings` ; section Tarifs sur la landing.
+6. **Dette principale** : aucun test, reliquat de config `darkMode`, incohérence de devise. Cron opérationnel (`vercel.json`, `0 7 * * *`) — envoi réel encore opt-in (`emailSendingEnabled`).
