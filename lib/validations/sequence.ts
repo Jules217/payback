@@ -8,7 +8,8 @@ export const sequenceStepSchema = z.object({
   offsetDays: z.coerce
     .number({ invalid_type_error: "Le délai doit être un nombre" })
     .int("Le délai doit être un entier")
-    .min(0, "Le délai ne peut pas être négatif"),
+    .min(0, "Le délai ne peut pas être négatif")
+    .max(365, "Le délai ne peut pas dépasser 365 jours"),
   channel: z.enum(REMINDER_CHANNELS, {
     errorMap: () => ({ message: "Canal invalide" }),
   }),
@@ -31,7 +32,7 @@ export const sequenceFormSchema = z
       .trim()
       .min(1, "Le nom de la séquence est requis")
       .max(120),
-    steps: z.array(sequenceStepSchema),
+    steps: z.array(sequenceStepSchema).max(20, "Une séquence ne peut pas dépasser 20 étapes"),
   })
   .superRefine((data, ctx) => {
     const seen = new Set<number>();

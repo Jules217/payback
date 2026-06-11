@@ -4,6 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { sendReminderEmail } from "@/lib/email/send-reminder-email";
 import { eligibleSteps } from "@/lib/reminders/eligible-steps";
 import { renderTemplate } from "@/lib/reminders/render-template";
+import { reserveEmailQuota } from "@/lib/reminders/email-quota";
+
+/** Seuil de récupération d'un event coincé en SENDING (crash en plein envoi). */
+const SENDING_STALE_MS = 15 * 60 * 1000;
 
 export type BatchEnqueueOrgResult = {
   ajoutées: number;
@@ -106,22 +110,54 @@ export async function batchEnqueueForOrg(
   return { ajoutées, ignorées };
 }
 
-export type SendQueueOrgResult = { envoyés: number; échoués: number };
+export type SendQueueOrgResult = {
+  envoyés: number;
+  échoués: number;
+  /**
+   * Events laissés en file faute de quota org atteint OU plafond de run atteint
+   * (= file − ce qui a pu être réservé). Pour le monitoring, pas l'UI.
+   */
+  restants: number;
+};
+
+export type SendQueueForOrgOptions = {
+  /**
+   * Budget d'envoi maximal pour cet appel, imposé par l'appelant (plafond dur du
+   * run de cron). Borne le nombre d'envois EN PLUS du quota org ; le reste de la
+   * file part au run suivant.
+   */
+  maxToSend?: number;
+};
 
 /**
- * Envoie tous les ReminderEvent SCHEDULED/CLIENT d'une organisation.
+ * Envoie les ReminderEvent CLIENT en file d'une organisation.
  *
  * Variante de sendQueue() sans dépendance à la session Supabase ni revalidatePath
  * — utilisable depuis un cron Route Handler.
  * Respecte emailSendingEnabled : retourne { 0, 0 } si désactivé.
+ *
+ * Quota journalier + budget de run : on ne réserve (et n'envoie) que
+ * min(file, budget de run, quota restant). Claim atomique par event pour éviter
+ * qu'un autre run double l'envoi, et récupération des SENDING orphelins.
  */
 export async function sendQueueForOrg(
-  org: Organization
+  org: Organization,
+  options?: SendQueueForOrgOptions
 ): Promise<SendQueueOrgResult> {
-  if (!org.emailSendingEnabled) return { envoyés: 0, échoués: 0 };
+  if (!org.emailSendingEnabled) return { envoyés: 0, échoués: 0, restants: 0 };
+
+  const now = new Date();
+  const staleThreshold = new Date(now.getTime() - SENDING_STALE_MS);
 
   const events = await prisma.reminderEvent.findMany({
-    where: { organizationId: org.id, status: "SCHEDULED", deliveryMode: "CLIENT" },
+    where: {
+      organizationId: org.id,
+      deliveryMode: "CLIENT",
+      OR: [
+        { status: "SCHEDULED" },
+        { status: "SENDING", sentAt: null, claimedAt: { lt: staleThreshold } },
+      ],
+    },
     orderBy: { scheduledAt: "asc" },
     include: {
       invoice: {
@@ -137,11 +173,51 @@ export async function sendQueueForOrg(
     },
   });
 
+  if (events.length === 0) return { envoyés: 0, échoués: 0, restants: 0 };
+
+  // On ne réserve que ce qu'on pourra réellement tenter d'envoyer dans ce run
+  // (borné par le budget). Réserver plus gaspillerait du quota sur des events
+  // qu'on laisse en file à cause du plafond de run.
+  const wantToSend =
+    options?.maxToSend != null
+      ? Math.min(events.length, Math.max(0, options.maxToSend))
+      : events.length;
+  // Plafond de run épuisé : toute la file reste, faute de budget.
+  if (wantToSend === 0) {
+    return { envoyés: 0, échoués: 0, restants: events.length };
+  }
+
+  const reservation = await reserveEmailQuota(org, wantToSend);
+  let toSend = reservation.allowed;
+
+  // Laissés en file faute de quota org ou de plafond de run : ce que la
+  // réservation n'a pas couvert (les events au-delà de `allowed` ne sont jamais
+  // claimés). Les échecs d'envoi restent dans `allowed` → ils ne comptent pas ici.
+  const restants = events.length - reservation.allowed;
+
   let envoyés = 0;
   let échoués = 0;
-  const now = new Date();
 
   for (const event of events) {
+    if (toSend <= 0) break; // quota ou budget de run épuisé
+
+    // Claim atomique (compare-and-set) : un autre run concurrent ne peut pas
+    // envoyer le même event. count===0 → déjà pris, on saute sans consommer
+    // notre budget.
+    const claimed = await prisma.reminderEvent.updateMany({
+      where: {
+        id: event.id,
+        OR: [
+          { status: "SCHEDULED" },
+          { status: "SENDING", sentAt: null, claimedAt: { lt: staleThreshold } },
+        ],
+      },
+      data: { status: "SENDING", claimedAt: now, sentAt: null },
+    });
+    if (claimed.count === 0) continue;
+
+    toSend--;
+
     if (!event.recipientEmail || !event.messageSubject || !event.messageBody) {
       await prisma.reminderEvent.update({
         where: { id: event.id },
@@ -181,5 +257,5 @@ export async function sendQueueForOrg(
     }
   }
 
-  return { envoyés, échoués };
+  return { envoyés, échoués, restants };
 }

@@ -12,6 +12,10 @@ import { sendReminderEmail } from "@/lib/email/send-reminder-email";
 import { getTestRecipient } from "@/lib/email/config";
 import { stepOffsetLabel } from "@/lib/labels";
 import { hasProFeatures } from "@/lib/subscription";
+import { reserveEmailQuota, quotaReachedMessage } from "@/lib/reminders/email-quota";
+
+/** Seuil de récupération d'un event coincé en SENDING (crash en plein envoi). */
+const SENDING_STALE_MS = 15 * 60 * 1000;
 
 export type SequenceFormState = {
   ok: boolean;
@@ -95,8 +99,21 @@ export async function sendQueue(
     };
   }
 
+  const now = new Date();
+  const staleThreshold = new Date(now.getTime() - SENDING_STALE_MS);
+
+  // On charge les SCHEDULED et on récupère aussi les SENDING orphelins : un event
+  // resté en SENDING (crash en plein envoi) sans `sentAt` et claimé il y a plus
+  // de 15 min redevient éligible.
   const events = await prisma.reminderEvent.findMany({
-    where: { organizationId: org.id, status: "SCHEDULED", deliveryMode: "CLIENT" },
+    where: {
+      organizationId: org.id,
+      deliveryMode: "CLIENT",
+      OR: [
+        { status: "SCHEDULED" },
+        { status: "SENDING", sentAt: null, claimedAt: { lt: staleThreshold } },
+      ],
+    },
     orderBy: { scheduledAt: "asc" },
     include: {
       invoice: {
@@ -116,12 +133,40 @@ export async function sendQueue(
     return { ...empty, message: "La file d'attente est vide." };
   }
 
+  // Quota journalier : réserve jusqu'à events.length envois. On n'enverra que
+  // `allowed`, les plus anciens ; le reste demeure SCHEDULED pour plus tard.
+  const reservation = await reserveEmailQuota(org, events.length);
+  let toSend = reservation.allowed;
+
   let envoyés = 0;
   let échoués = 0;
+  let restantsQuota = 0; // laissés en file faute de quota
   const détails: SendQueueDetail[] = [];
-  const now = new Date();
 
   for (const event of events) {
+    // Plafond du quota atteint : on laisse cet event (et les suivants) SCHEDULED.
+    if (toSend <= 0) {
+      restantsQuota++;
+      continue;
+    }
+
+    // Claim atomique (compare-and-set) : passe SCHEDULED (ou SENDING orphelin) à
+    // SENDING. Si 0 ligne touchée, un autre run l'a déjà pris → on saute sans
+    // consommer notre budget d'envoi.
+    const claimed = await prisma.reminderEvent.updateMany({
+      where: {
+        id: event.id,
+        OR: [
+          { status: "SCHEDULED" },
+          { status: "SENDING", sentAt: null, claimedAt: { lt: staleThreshold } },
+        ],
+      },
+      data: { status: "SENDING", claimedAt: now, sentAt: null },
+    });
+    if (claimed.count === 0) continue;
+
+    toSend--;
+
     // Défensif : un event sans snapshot ne devrait pas exister (enqueueReminder
     // garantit le snapshot), mais on le marque FAILED plutôt que de planter.
     if (!event.recipientEmail || !event.messageSubject || !event.messageBody) {
@@ -189,10 +234,15 @@ export async function sendQueue(
   revalidatePath("/reminders/queue");
   revalidatePath("/dashboard");
 
+  const parts: string[] = [`${envoyés} envoyé${envoyés > 1 ? "s" : ""}`];
+  if (échoués > 0) parts.push(`${échoués} échoué${échoués > 1 ? "s" : ""}`);
+  if (restantsQuota > 0)
+    parts.push(`${restantsQuota} restant${restantsQuota > 1 ? "s" : ""} en file`);
+  // Message de quota adapté au plan quand des relances restent faute de quota.
   const message =
-    échoués === 0
-      ? `${envoyés} email${envoyés > 1 ? "s" : ""} envoyé${envoyés > 1 ? "s" : ""}.`
-      : `${envoyés} envoyé${envoyés > 1 ? "s" : ""}, ${échoués} échoué${échoués > 1 ? "s" : ""}.`;
+    restantsQuota > 0
+      ? `${parts.join(", ")}. ${quotaReachedMessage(org)}`
+      : `${parts.join(", ")}.`;
 
   return { ok: true, message, envoyés, échoués, détails };
 }
@@ -339,12 +389,44 @@ export async function sendTestReminderForInvoice(
     };
   }
 
+  // Rate-limit des emails de test (fenêtre glissante d'une heure) : quota séparé
+  // du quota d'envois réels. Borne à la fois par facture et par organisation
+  // pour éviter qu'un test serve à spammer l'adresse de test.
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const [invoiceTestCount, orgTestCount] = await Promise.all([
+    prisma.emailTestLog.count({
+      where: { invoiceId: invoice.id, sentAt: { gte: oneHourAgo } },
+    }),
+    prisma.emailTestLog.count({
+      where: { organizationId: org.id, sentAt: { gte: oneHourAgo } },
+    }),
+  ]);
+  if (invoiceTestCount > 5) {
+    return {
+      ok: false,
+      message:
+        "Trop d'emails test pour cette facture. Réessayez dans une heure.",
+    };
+  }
+  if (orgTestCount > 20) {
+    return {
+      ok: false,
+      message: "Limite d'emails test atteinte pour aujourd'hui.",
+    };
+  }
+
   const { subject, body } = renderTemplate({
     subjectTemplate: step.template.subject ?? "",
     bodyTemplate: step.template.body ?? "",
     invoice,
     client: invoice.client,
     organization: org,
+  });
+
+  // Journalise l'essai AVANT l'envoi : le rate-limit compte les tentatives, pas
+  // seulement les succès (un envoi échoué ne doit pas rouvrir la vanne).
+  await prisma.emailTestLog.create({
+    data: { organizationId: org.id, invoiceId: invoice.id },
   });
 
   // Envoi réel — uniquement vers l'adresse de test.
@@ -495,6 +577,13 @@ export async function sendClientReminderForInvoice(
     client: invoice.client,
     organization: org,
   });
+
+  // Quota journalier : réserve 1 envoi avant d'appeler Resend. Si le plafond du
+  // jour est atteint, on refuse sans rien envoyer.
+  const { allowed } = await reserveEmailQuota(org, 1);
+  if (allowed === 0) {
+    return { ok: false, message: quotaReachedMessage(org) };
+  }
 
   // Envoi réel vers le client (jamais l'adresse de test).
   const result = await sendReminderEmail({

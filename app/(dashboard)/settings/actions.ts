@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
@@ -91,6 +92,13 @@ export async function updateOrgName(
 export async function updateAutoSend(
   enabled: boolean
 ): Promise<SettingsFormState> {
+  // L'argument vient du client : on valide qu'il s'agit bien d'un booléen.
+  const parsed = z.boolean().safeParse(enabled);
+  if (!parsed.success) {
+    return { ok: false, message: "Valeur invalide." };
+  }
+  enabled = parsed.data;
+
   const org = await getCurrentOrganization();
   await prisma.organization.update({
     where: { id: org.id },

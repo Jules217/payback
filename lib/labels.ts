@@ -92,6 +92,7 @@ export const reminderToneVariants: Record<ReminderTone, BadgeVariant> = {
 
 export const reminderEventStatusLabels: Record<ReminderEventStatus, string> = {
   SCHEDULED: "Programmée",
+  SENDING: "En cours d'envoi",
   SIMULATED: "Simulée",
   SENT: "Envoyée",
   FAILED: "Échouée",
@@ -103,6 +104,7 @@ export const reminderEventStatusVariants: Record<
   BadgeVariant
 > = {
   SCHEDULED: "outline",
+  SENDING: "secondary",
   SIMULATED: "secondary",
   SENT: "default",
   FAILED: "destructive",

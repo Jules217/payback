@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -7,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { invoiceFormSchema } from "@/lib/validations/invoice";
 import { batchEnqueueForOrg } from "@/lib/reminders/batch-enqueue";
-import { hasProFeatures } from "@/lib/subscription";
+import { hasProFeatures, planLimits } from "@/lib/subscription";
 
 export type BatchEnqueueResult = {
   ok: boolean;
@@ -68,6 +69,20 @@ export async function createInvoice(
       ok: false,
       message: "Client introuvable.",
       errors: { clientId: ["Client introuvable"] },
+      values: raw,
+    };
+  }
+
+  // Cap de création par plan (anti-abus). Compte toutes les factures de l'org
+  // (tous statuts confondus) : le cap borne le volume total créé.
+  const maxInvoices = planLimits(org).maxInvoices;
+  const invoiceCount = await prisma.invoice.count({
+    where: { organizationId: org.id },
+  });
+  if (invoiceCount >= maxInvoices) {
+    return {
+      ok: false,
+      message: `Limite de ${maxInvoices} factures atteinte sur votre plan. Passez au plan supérieur pour en ajouter davantage.`,
       values: raw,
     };
   }
@@ -225,6 +240,21 @@ export async function cancelInvoice(invoiceId: string): Promise<void> {
 export async function batchEnqueueReminders(
   invoiceIds: string[]
 ): Promise<BatchEnqueueResult> {
+  // Borne anti-abus : au plus 100 factures par lot, ids non vides.
+  const parsed = z
+    .array(z.string().min(1))
+    .max(100, "Trop de factures sélectionnées (100 maximum).")
+    .safeParse(invoiceIds);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: parsed.error.errors[0]?.message ?? "Sélection invalide.",
+      ajoutées: 0,
+      ignorées: 0,
+    };
+  }
+  invoiceIds = parsed.data;
+
   if (invoiceIds.length === 0) {
     return { ok: true, message: "Aucune facture sélectionnée.", ajoutées: 0, ignorées: 0 };
   }

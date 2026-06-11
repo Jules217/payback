@@ -9,6 +9,13 @@
 > Mis à jour après le **cron batch enqueue** : `batchEnqueueForOrg` extrait dans `lib/reminders/batch-enqueue.ts`, route `/api/cron/reminders` (Bearer token), `vercel.json` (schedule `0 7 * * *`), `CRON_SECRET` dans `.env.example`.
 > Mis à jour après l'**envoi automatique opt-in (étape 4)** : `autoSendEnabled` sur `Organization` (migration `20260610053253`), `sendQueueForOrg` dans `batch-enqueue.ts`, cron envoie la file si opt-in, card « Envoi automatique » + Switch dans `/settings`.
 > Mis à jour après l'**intégration Lemon Squeezy** (phases 2–6) : 2 enums + 5 champs sur `Organization` (migration `20260610191243`), `lib/subscription.ts` (hasActiveSubscription / hasProFeatures / subscriptionLabel), `lib/lemonsqueezy.ts` (getCheckoutUrl via fetch natif), webhook `/api/webhooks/lemonsqueezy` (vérification HMAC-SHA256, lookup org, sync statut), card « Abonnement » dans `/settings` (SubscriptionCard + `startCheckout`), gate `hasProFeatures` sur envoi groupé et cron, section Tarifs sur la landing.
+> Mis à jour après le **Bloc 4 — limites de volume & anti-abus** :
+> - **Quota d'envois journalier** : `Organization.emailsSentToday`/`emailsSentDate` + `PLAN_LIMITS`/`planLimits(org)` dans `lib/subscription.ts` (Starter 50/j · 50 clients · 200 factures ; Pro 500/j · 1000 · 5000) ; `lib/reminders/email-quota.ts` (`reserveEmailQuota` réserve avant envoi via `SELECT … FOR UPDATE`, `quotaReachedMessage` adapté au plan).
+> - **Anti-race** : statut `SENDING` + `ReminderEvent.claimedAt`, claim atomique compare-and-set dans `sendQueue`/`sendQueueForOrg`, récupération des `SENDING` orphelins (> 15 min, jamais ajouté à `CONSUMING_STATUSES`).
+> - **Rate-limit emails test** : table `EmailTestLog` (5/facture/h, 20/org/h), quota séparé du quota réel.
+> - **Caps de création** (`createClient`/`createInvoice` ≥ max → refus) + **bornes zod** (montant 10 M, 20 étapes, offset 365 j, batch ≤ 100 ids, `updateAutoSend` booléen).
+> - **Cron** : `MAX_EMAILS_PER_CRON_RUN = 200` (plafond global par run), drainage des reliquats tant qu'il reste du budget, champ `restants` par org + `total_restants` dans la réponse JSON (monitoring).
+> - **Landing** : card Tarifs chiffrée ; migrations de ce chantier : `20260611190912_add_volume_limits`, `20260611191550_add_sending_status_and_claim`.
 
 ---
 
@@ -204,13 +211,16 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
   - `20260609000002_add_supabase_id/migration.sql` — ajoute `"supabaseId" TEXT` + index unique sur `User`.
   - `20260610053253_add_auto_send_enabled/migration.sql` — ajoute `"autoSendEnabled" BOOLEAN NOT NULL DEFAULT false` sur `Organization`.
   - `20260610191243_add_lemonsqueezy_subscription/migration.sql` — crée les enums `SubscriptionStatus` (INACTIVE/TRIALING/ACTIVE/PAST_DUE/CANCELLED) et `SubscriptionPlan` (STARTER/PRO) ; ajoute 5 colonnes sur `Organization` : `lemonSqueezyCustomerId TEXT`, `lemonSqueezySubscriptionId TEXT`, `subscriptionStatus` (défaut `INACTIVE`), `subscriptionEndsAt TIMESTAMP`, `subscriptionPlan`.
+  - `20260611003250_add_processed_webhook_events/migration.sql` — crée la table `ProcessedWebhookEvent` (`eventId` unique) pour l'anti-rejeu des webhooks Lemon Squeezy.
+  - `20260611190912_add_volume_limits/migration.sql` (Bloc 4) — ajoute `emailsSentToday INTEGER NOT NULL DEFAULT 0` + `emailsSentDate TIMESTAMP` sur `Organization` ; crée la table `EmailTestLog` (`organizationId`, `invoiceId`, `sentAt`, index `(organizationId, sentAt)` et `(invoiceId, sentAt)`).
+  - `20260611191550_add_sending_status_and_claim/migration.sql` (Bloc 4) — ajoute la valeur `SENDING` à l'enum `ReminderEventStatus` + la colonne `claimedAt TIMESTAMP` sur `ReminderEvent`.
 
 ### Modèles (champs principaux)
 
 | Modèle | Champs clés |
 | --- | --- |
 | `User` | id, **supabaseId** (String?, unique — lien vers l'identité Supabase Auth), email (unique), name, timestamps · relation `memberships` |
-| `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo**, **autoSendEnabled** (bool, défaut false — active l'envoi automatique par le cron), **lemonSqueezyCustomerId** (Text?), **lemonSqueezySubscriptionId** (Text?), **subscriptionStatus** (`SubscriptionStatus`, défaut INACTIVE), **subscriptionEndsAt** (DateTime?), **subscriptionPlan** (`SubscriptionPlan`?) · relations clients/invoices/payments/sequences/templates/events |
+| `Organization` | id, name, email, **emailSendingEnabled** (bool, défaut false), **emailFromName**, **emailReplyTo**, **autoSendEnabled** (bool, défaut false — active l'envoi automatique par le cron), **emailsSentToday** (Int, défaut 0 — compteur d'envois réels du jour), **emailsSentDate** (DateTime? — jour courant du compteur, reset à minuit UTC), **lemonSqueezyCustomerId** (Text?), **lemonSqueezySubscriptionId** (Text?), **subscriptionStatus** (`SubscriptionStatus`, défaut INACTIVE), **subscriptionEndsAt** (DateTime?), **subscriptionPlan** (`SubscriptionPlan`?) · relations clients/invoices/payments/sequences/templates/events |
 | `Membership` | userId, organizationId, role (`MemberRole OWNER/ADMIN/MEMBER`), unique (user, org) |
 | `Client` | name, companyName, email, phone, preferredChannel (`EMAIL/SMS/BOTH`), language (`FR/EN`), status (`ACTIVE/ARCHIVED`), notes |
 | `Invoice` | number, amountCents (Int), currency (défaut `CAD`), issuedAt, dueAt, status (`DRAFT/SENT/PENDING/OVERDUE/PAID/CANCELLED`), paymentUrl, paidAt |
@@ -218,7 +228,8 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
 | `ReminderSequence` | name, isActive, relation `steps` |
 | `ReminderStep` | offsetDays (Int), channel (`EMAIL/SMS`), order, isActive, templateId (nullable, `onDelete: SetNull`) |
 | `MessageTemplate` | name, subject, body, channel, tone (`GENTLE/PROFESSIONAL/FIRM`), language, isActive |
-| `ReminderEvent` | channel, status (`SCHEDULED/SIMULATED/SENT/FAILED/CANCELLED`), scheduledAt, sentAt, offsetDays, messageSubject/messageBody, providerMessageId, errorMessage, **recipientEmail**, **deliveryMode** (`ReminderDeliveryMode SIMULATION/TEST/CLIENT`) · **Index partiel** `uniq_reminder_active` (`invoiceId, offsetDays, deliveryMode`) `WHERE status IN ('SCHEDULED','SENT')` — bloque l'enqueue doublon et garantit une seule relance active par (facture, offset, mode). |
+| `ReminderEvent` | channel, status (`SCHEDULED/SENDING/SIMULATED/SENT/FAILED/CANCELLED` — **SENDING** = claim atomique en cours d'envoi), scheduledAt, sentAt, **claimedAt** (DateTime? — horodatage du claim, sert à récupérer un SENDING orphelin si `claimedAt < now-15min`), offsetDays, messageSubject/messageBody, providerMessageId, errorMessage, **recipientEmail**, **deliveryMode** (`ReminderDeliveryMode SIMULATION/TEST/CLIENT`) · **Index partiel** `uniq_reminder_active` (`invoiceId, offsetDays, deliveryMode`) `WHERE status IN ('SCHEDULED','SENT')` — bloque l'enqueue doublon et garantit une seule relance active par (facture, offset, mode). |
+| `EmailTestLog` | id, organizationId, invoiceId, sentAt (défaut now) · index `(organizationId, sentAt)` et `(invoiceId, sentAt)`. Journal volatil du **rate-limit des emails de test** (fenêtre glissante 1 h) ; pas de FK (n'entrave pas la suppression d'une facture). |
 
 > ⚠️ Incohérence mineure : `Invoice.currency` par défaut `CAD` mais `Payment.currency` par défaut `EUR`. Le `formatCurrency` de `lib/utils.ts` a un défaut `EUR` alors que le seed génère du `CAD`.
 
@@ -253,7 +264,7 @@ Une page du dashboard est un **Server Component** (`async`) exportant `export co
 | **Paiement — Lemon Squeezy** | **Branché** (fetch natif, pas de SDK npm). `lib/lemonsqueezy.ts` crée des checkouts via l'API LS. `app/api/webhooks/lemonsqueezy/route.ts` reçoit et vérifie les événements (HMAC-SHA256), met à jour `subscriptionStatus/Plan/EndsAt` sur l'org. `lib/subscription.ts` expose `hasActiveSubscription`, `hasProFeatures`, `subscriptionLabel`. Gate `hasProFeatures` appliqué sur le cron et les actions d'envoi groupé. | `LEMONSQUEEZY_API_KEY`, `LEMONSQUEEZY_STORE_ID`, `LEMONSQUEEZY_WEBHOOK_SECRET`, `LEMONSQUEEZY_VARIANT_STARTER`, `LEMONSQUEEZY_VARIANT_PRO` (commentés dans `.env.example`) |
 | **Paiement — Stripe** | **Non branché / non utilisé** (remplacé par Lemon Squeezy). `Invoice.paymentUrl` reste un champ texte libre (liens factices dans le seed). | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (commentés, non utilisés) |
 | **Auth — Supabase** | **Branché** (`@supabase/supabase-js` + `@supabase/ssr`). Login / register / logout fonctionnels. Routes dashboard protégées par `middleware.ts` racine. Session gérée via cookie `sb-{ref}-auth-token` rafraîchi à chaque requête par `updateSession`. Provisionnement automatique User+Org+Membership au 1er login. | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (présents dans `.env`) |
-| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible **pour les orgs ayant `hasProFeatures`** (7h UTC, traitement séquentiel). Si `org.autoSendEnabled && ajoutées > 0` : appelle `sendQueueForOrg` → envoie la file sans intervention manuelle (respecte `emailSendingEnabled`). Réponse JSON inclut `auto_envoyés`. | `CRON_SECRET` (commenté dans `.env.example`) |
+| **Cron — Vercel** | **Branché** (`vercel.json` `crons` array). Route `/api/cron/reminders` protégée par Bearer token. Enqueue la 1re étape éligible **pour les orgs ayant `hasProFeatures`** (7h UTC, traitement séquentiel). Si `org.autoSendEnabled && remainingRunBudget > 0` : appelle `sendQueueForOrg(org, { maxToSend })` → draine la file (y compris les reliquats des runs précédents) sous le **plafond global `MAX_EMAILS_PER_CRON_RUN = 200`** (protège du timeout Vercel) ET du quota org. Réponse JSON par org : `auto_envoyés`, `auto_échoués`, `restants` (events laissés faute de quota/plafond) ; récap global `total_auto_envoyés` + `total_restants`. | `CRON_SECRET` (commenté dans `.env.example`) |
 | **Base de données** | Requise. | `DATABASE_URL` |
 | **App** | — | `NEXT_PUBLIC_APP_URL` |
 
@@ -311,6 +322,7 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 > ~~`app/(auth)/login` & `register`~~ — **résolu** : formulaires fonctionnels avec Supabase Auth.
 > ~~Déclenchement automatique absent~~ — **résolu** : cron Vercel `0 7 * * *` + `autoSendEnabled` opt-in (Switch dans `/settings`) + `sendQueueForOrg` dans `lib/reminders/batch-enqueue.ts`.
 > ~~Monétisation absente~~ — **résolu** : Lemon Squeezy intégré (phases 2–6) — checkout, webhook HMAC, modèle d'abonnement, gate `hasProFeatures` sur cron et envoi groupé.
+> ~~Pas de limites de volume / anti-abus~~ — **résolu** (Bloc 4) : quotas d'envoi journaliers par plan (`reserveEmailQuota`), caps de création clients/factures, rate-limit emails test (`EmailTestLog`), bornes zod, anti-race par claim atomique (`SENDING` + `claimedAt`) avec récupération des orphelins, plafond `MAX_EMAILS_PER_CRON_RUN` au cron.
 
 ---
 
@@ -344,4 +356,5 @@ Modélisation propre en base (`Organization` ↔ `Membership` ↔ `User`) avec `
 3. **Trois intégrations réelles** : **Resend** (email), **Supabase** (auth + session + protection des routes) et **Lemon Squeezy** (monétisation — checkout, webhook HMAC-SHA256, statut abonnement). Twilio reste réservé ; Stripe non utilisé (remplacé par LS).
 4. **Auth et multi-tenant opérationnels** : session Supabase, middleware de protection, provisionnement automatique User+Org+Membership au 1er login, isolation par `org.id` effective.
 5. **Monétisation opérationnelle** : modèle `SubscriptionStatus/Plan` sur `Organization`, `lib/subscription.ts` (hasActiveSubscription / hasProFeatures), gate Pro sur le cron (`/api/cron/reminders`) et les actions d'envoi groupé ; card Abonnement dans `/settings` ; section Tarifs sur la landing.
-6. **Dette principale** : aucun test, reliquat de config `darkMode`, incohérence de devise. Cron opérationnel (`vercel.json`, `0 7 * * *`) — envoi réel encore opt-in (`emailSendingEnabled`).
+6. **Garde-fous anti-abus opérationnels** (Bloc 4) : quotas d'envoi journaliers par plan, caps de création, rate-limit emails test, anti-race par claim atomique (`SENDING`/`claimedAt`) + récupération, plafond `MAX_EMAILS_PER_CRON_RUN` et observabilité cron (`restants`/`total_restants`).
+7. **Dette principale** : aucun test, reliquat de config `darkMode`, incohérence de devise. Cron opérationnel (`vercel.json`, `0 7 * * *`) — envoi réel encore opt-in (`emailSendingEnabled`).

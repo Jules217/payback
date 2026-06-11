@@ -37,6 +37,7 @@ export type ReminderTone = "GENTLE" | "PROFESSIONAL" | "FIRM";
 
 export type ReminderEventStatus =
   | "SCHEDULED"
+  | "SENDING"
   | "SIMULATED"
   | "SENT"
   | "FAILED"

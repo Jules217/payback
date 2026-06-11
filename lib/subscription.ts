@@ -12,6 +12,22 @@ export function hasActiveSubscription(org: Organization): boolean {
   return false;
 }
 
+// ── Limites de volume par plan (Bloc 4 anti-abus) ─────────────────
+export const PLAN_LIMITS = {
+  STARTER: { emailsPerDay: 50, maxClients: 50, maxInvoices: 200 },
+  PRO:     { emailsPerDay: 500, maxClients: 1000, maxInvoices: 5000 },
+  // Org sans plan actif (INACTIVE/TRIALING sans plan) = limites Starter
+  DEFAULT: { emailsPerDay: 50, maxClients: 50, maxInvoices: 200 },
+} as const;
+
+export type PlanLimits = (typeof PLAN_LIMITS)[keyof typeof PLAN_LIMITS];
+
+export function planLimits(org: Organization): PlanLimits {
+  if (org.subscriptionPlan === "PRO" && hasActiveSubscription(org))
+    return PLAN_LIMITS.PRO;
+  return PLAN_LIMITS.STARTER;
+}
+
 export function hasProFeatures(org: Organization): boolean {
   if (!hasActiveSubscription(org)) return false;
   return org.subscriptionPlan === "PRO";

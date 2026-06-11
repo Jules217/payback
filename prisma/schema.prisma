@@ -50,6 +50,12 @@ model Organization {
   subscriptionEndsAt         DateTime?
   subscriptionPlan           SubscriptionPlan?
 
+  // ── Quota d'envois journalier (Bloc 4 anti-abus) ──────────────
+  /** Nombre d'emails réels (CLIENT) envoyés le jour `emailsSentDate`. */
+  emailsSentToday Int       @default(0)
+  /** Jour courant du compteur (date à minuit UTC, pas un datetime d'envoi). */
+  emailsSentDate  DateTime?
+
   members           Membership[]
   clients           Client[]
   invoices          Invoice[]
@@ -258,6 +264,12 @@ model ReminderEvent {
   status         ReminderEventStatus @default(SCHEDULED)
   scheduledAt    DateTime
   sentAt         DateTime?
+  /**
+   * Horodatage du claim atomique (passage SCHEDULED → SENDING par un run d'envoi).
+   * Sert à récupérer un event coincé en SENDING : si claimedAt < now-15min, le run
+   * suivant peut le re-claim (crash en plein envoi). Remis à now à chaque claim.
+   */
+  claimedAt      DateTime?
   /** Décalage de l'étape déclenchante (J+7 → 7), pour l'historique et l'anti-doublon. */
   offsetDays     Int?
   messageSubject String?
@@ -282,6 +294,7 @@ model ReminderEvent {
 
 enum ReminderEventStatus {
   SCHEDULED
+  SENDING // claim atomique en cours d'envoi ; récupérable si bloqué (claimedAt < now-15min)
   SIMULATED
   SENT
   FAILED
@@ -308,6 +321,20 @@ enum SubscriptionStatus {
 enum SubscriptionPlan {
   STARTER
   PRO
+}
+
+// ── Rate-limit des emails de test ─────────────────────────────
+// Fenêtre glissante simple : on compte les lignes de l'heure écoulée.
+// Pas de FK vers Organization/Invoice : journal volatil, on évite de
+// bloquer la suppression d'une facture sur ce log.
+model EmailTestLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  sentAt         DateTime @default(now())
+
+  @@index([organizationId, sentAt])
+  @@index([invoiceId, sentAt])
 }
 
 // ── Idempotence des webhooks ──────────────────────────────────

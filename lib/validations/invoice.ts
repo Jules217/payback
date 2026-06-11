@@ -32,7 +32,8 @@ export const invoiceFormSchema = z
       .max(60),
     amount: z.coerce
       .number({ invalid_type_error: "Montant invalide" })
-      .positive("Le montant doit être supérieur à 0"),
+      .positive("Le montant doit être supérieur à 0")
+      .max(10_000_000, "Le montant est trop élevé"),
     currency: z.enum(CURRENCIES, {
       errorMap: () => ({ message: "Devise invalide" }),
     }),

@@ -30,14 +30,15 @@ const features = [
 ];
 
 const starterFeatures = [
-  "Clients et factures illimités",
+  "Jusqu'à 50 clients · 200 factures",
+  "50 relances email par jour",
   "Séquences de relance personnalisées",
-  "Envoi d'emails aux clients",
   "Historique des relances",
 ];
 
 const proFeatures = [
-  "Tout Starter, plus :",
+  "Jusqu'à 1000 clients · 5000 factures",
+  "500 relances email par jour",
   "Envoi groupé de relances",
   "Cron automatique quotidien",
   "Priorité support",

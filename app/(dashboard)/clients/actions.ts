@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentOrganization } from "@/lib/current-organization";
 import { clientFormSchema } from "@/lib/validations/client";
+import { planLimits } from "@/lib/subscription";
 
 export type ClientFormState = {
   ok: boolean;
@@ -46,6 +47,20 @@ export async function createClient(
 
   const org = await getCurrentOrganization();
   const data = parsed.data;
+
+  // Cap de création par plan (anti-abus). On compte tous les clients de l'org,
+  // y compris archivés — le cap borne le volume total créé, pas seulement actifs.
+  const maxClients = planLimits(org).maxClients;
+  const clientCount = await prisma.client.count({
+    where: { organizationId: org.id },
+  });
+  if (clientCount >= maxClients) {
+    return {
+      ok: false,
+      message: `Limite de ${maxClients} clients atteinte sur votre plan. Passez au plan supérieur pour en ajouter davantage.`,
+      values: raw,
+    };
+  }
 
   await prisma.client.create({
     data: {
