@@ -72,11 +72,12 @@ export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
   const { invoiceId } = await params;
-  const invoice = await prisma.invoice.findUnique({
-    where: { id: invoiceId },
+  const org = await getCurrentOrganization();
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: invoiceId, organizationId: org.id },
     select: { number: true },
   });
-  return { title: invoice ? `Facture ${invoice.number}` : "Facture" };
+  return { title: invoice ? `Facture ${invoice.number}` : "Facture · Payback" };
 }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {

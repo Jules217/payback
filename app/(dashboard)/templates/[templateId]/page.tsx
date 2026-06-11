@@ -35,11 +35,12 @@ export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
   const { templateId } = await params;
-  const template = await prisma.messageTemplate.findUnique({
-    where: { id: templateId },
+  const org = await getCurrentOrganization();
+  const template = await prisma.messageTemplate.findFirst({
+    where: { id: templateId, organizationId: org.id },
     select: { name: true },
   });
-  return { title: template?.name ?? "Modèle" };
+  return { title: template?.name ?? "Modèle · Payback" };
 }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {

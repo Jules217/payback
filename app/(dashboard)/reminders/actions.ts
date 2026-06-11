@@ -768,9 +768,15 @@ export async function updateSequence(
   }
 
   // Réconciliation : suppression des étapes retirées, puis upsert des autres.
+  // `existingStepIds` = ids réellement rattachés à CETTE séquence (déjà scopée
+  // à l'org plus haut). Garde de sécurité : seul un id présent dans cet ensemble
+  // peut tomber dans une branche `update`. Un id inconnu ou falsifié (deviné,
+  // appartenant à une autre séquence) est traité comme une création dans la
+  // séquence courante — jamais comme un update sur un ReminderStep d'autrui.
+  const existingStepIds = new Set(sequence.steps.map((s) => s.id));
   const keptIds = data.steps
     .map((s) => s.id)
-    .filter((id): id is string => Boolean(id));
+    .filter((id): id is string => id != null && existingStepIds.has(id));
   const toDelete = sequence.steps
     .map((s) => s.id)
     .filter((id) => !keptIds.includes(id));
@@ -789,7 +795,7 @@ export async function updateSequence(
         isActive: step.isActive,
         order: index,
       };
-      return step.id
+      return step.id && existingStepIds.has(step.id)
         ? prisma.reminderStep.update({ where: { id: step.id }, data: base })
         : prisma.reminderStep.create({
             data: { sequenceId, ...base },

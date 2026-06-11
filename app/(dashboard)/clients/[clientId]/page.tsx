@@ -43,11 +43,12 @@ export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
   const { clientId } = await params;
-  const client = await prisma.client.findUnique({
-    where: { id: clientId },
+  const org = await getCurrentOrganization();
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, organizationId: org.id },
     select: { name: true },
   });
-  return { title: client?.name ?? "Client" };
+  return { title: client?.name ?? "Client · Payback" };
 }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
