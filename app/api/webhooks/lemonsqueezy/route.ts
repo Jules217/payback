@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import type { SubscriptionStatus, SubscriptionPlan } from "@prisma/client";
 
 function verifySignature(rawBody: string, signature: string, secret: string): boolean {
@@ -77,6 +78,27 @@ export async function POST(request: NextRequest) {
 
   if (!attributes) {
     return NextResponse.json({ error: "Missing data.attributes" }, { status: 400 });
+  }
+
+  // ── Protection anti-rejeu ───────────────────────────────────────────────────
+  // Lemon Squeezy ne fournit pas d'identifiant d'événement distinct (ni dans
+  // `meta`, ni dans les en-têtes). On construit une clé STABLE : un même
+  // événement rejoué porte le même (data.id, event_name, updated_at), donc la
+  // même clé. On l'enregistre AVANT le traitement métier : l'index @unique de la
+  // DB (P2002) bloque tout doublon, même si le premier traitement est en cours.
+  const updatedAt = String((attributes.updated_at as string | undefined) ?? "");
+  const eventId = `${String(data?.id ?? "")}-${eventName}-${updatedAt}`;
+
+  try {
+    await prisma.processedWebhookEvent.create({
+      data: { eventId, eventName },
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      // Événement déjà traité → on acquitte sans rejouer le traitement métier.
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    throw e; // Toute autre erreur → 500
   }
 
   const customData = meta?.custom_data as Record<string, unknown> | undefined;

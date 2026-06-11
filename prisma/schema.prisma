@@ -309,3 +309,15 @@ enum SubscriptionPlan {
   STARTER
   PRO
 }
+
+// ── Idempotence des webhooks ──────────────────────────────────
+// Anti-rejeu : chaque événement Lemon Squeezy traité est enregistré ici.
+// L'index @unique sur eventId fait office de garde — c'est la DB qui rejette
+// tout doublon (P2002), pas un test applicatif, donc un rejeu reste bloqué même
+// si le premier traitement est encore en cours.
+model ProcessedWebhookEvent {
+  id          String   @id @default(cuid())
+  eventId     String   @unique // id (composite) de l'événement Lemon Squeezy
+  eventName   String // ex. subscription_created
+  processedAt DateTime @default(now())
+}
